@@ -8,6 +8,7 @@ import hmac
 import logging
 import time
 import secrets
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -110,6 +111,7 @@ async def ping_receiver():
 
 _FAILED_PIN_ATTEMPTS: Dict[str, List[float]] = {}
 _PIN_LOCKOUTS: Dict[str, float] = {}
+_PIN_RATE_LOCK = threading.Lock()
 MAX_PIN_ATTEMPTS_PER_WINDOW = 5
 PIN_RATE_LIMIT_WINDOW_SECONDS = 60
 PIN_LOCKOUT_DURATION_SECONDS = 300
@@ -118,40 +120,43 @@ PIN_LOCKOUT_DURATION_SECONDS = 300
 def check_pin_rate_limit(client_ip: str):
     """Enforce rate limits on pairing PIN verification to prevent brute-force search."""
     now = time.time()
-    lockout_until = _PIN_LOCKOUTS.get(client_ip, 0)
-    if now < lockout_until:
-        remaining = int(lockout_until - now)
-        logger.warning("PIN verification locked out for IP %s (remaining: %ds)", client_ip, remaining)
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many failed pairing attempts. Lockout in effect for {remaining} seconds."
-        )
-    elif client_ip in _PIN_LOCKOUTS:
-        del _PIN_LOCKOUTS[client_ip]
+    with _PIN_RATE_LOCK:
+        lockout_until = _PIN_LOCKOUTS.get(client_ip, 0)
+        if now < lockout_until:
+            remaining = int(lockout_until - now)
+            logger.warning("PIN verification locked out for IP %s (remaining: %ds)", client_ip, remaining)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed pairing attempts. Lockout in effect for {remaining} seconds."
+            )
+        elif client_ip in _PIN_LOCKOUTS:
+            del _PIN_LOCKOUTS[client_ip]
 
-    attempts = _FAILED_PIN_ATTEMPTS.get(client_ip, [])
-    attempts = [t for t in attempts if now - t < PIN_RATE_LIMIT_WINDOW_SECONDS]
-    _FAILED_PIN_ATTEMPTS[client_ip] = attempts
+        attempts = _FAILED_PIN_ATTEMPTS.get(client_ip, [])
+        attempts = [t for t in attempts if now - t < PIN_RATE_LIMIT_WINDOW_SECONDS]
+        _FAILED_PIN_ATTEMPTS[client_ip] = attempts
 
 
 def record_pin_failure(client_ip: str):
     """Record a failed PIN verification attempt and apply lockout if threshold exceeded."""
     now = time.time()
-    attempts = _FAILED_PIN_ATTEMPTS.setdefault(client_ip, [])
-    attempts.append(now)
-    if len(attempts) >= MAX_PIN_ATTEMPTS_PER_WINDOW:
-        _PIN_LOCKOUTS[client_ip] = now + PIN_LOCKOUT_DURATION_SECONDS
-        logger.warning(
-            "Excessive failed pairing PIN attempts from %s (%d attempts). Locked out for %ds.",
-            client_ip, len(attempts), PIN_LOCKOUT_DURATION_SECONDS
-        )
-        del _FAILED_PIN_ATTEMPTS[client_ip]
+    with _PIN_RATE_LOCK:
+        attempts = _FAILED_PIN_ATTEMPTS.setdefault(client_ip, [])
+        attempts.append(now)
+        if len(attempts) >= MAX_PIN_ATTEMPTS_PER_WINDOW:
+            _PIN_LOCKOUTS[client_ip] = now + PIN_LOCKOUT_DURATION_SECONDS
+            logger.warning(
+                "Excessive failed pairing PIN attempts from %s (%d attempts). Locked out for %ds.",
+                client_ip, len(attempts), PIN_LOCKOUT_DURATION_SECONDS
+            )
+            del _FAILED_PIN_ATTEMPTS[client_ip]
 
 
 def record_pin_success(client_ip: str):
     """Clear failed attempts on successful pairing."""
-    _FAILED_PIN_ATTEMPTS.pop(client_ip, None)
-    _PIN_LOCKOUTS.pop(client_ip, None)
+    with _PIN_RATE_LOCK:
+        _FAILED_PIN_ATTEMPTS.pop(client_ip, None)
+        _PIN_LOCKOUTS.pop(client_ip, None)
 
 
 def secure_str_equals(val1: Optional[str], val2: Optional[str]) -> bool:
@@ -212,7 +217,7 @@ def get_pairing_pin() -> str:
 
 
 @router.get("/pairing/config")
-async def get_pairing_config(
+def get_pairing_config(
     request: Request,
     pin: Optional[str] = None,
     auth_token: Optional[str] = Header(None, alias="x-auth-token"),
@@ -301,7 +306,7 @@ async def get_pairing_config(
 
 
 @router.post("/pairing/handshake")
-async def pairing_handshake(
+def pairing_handshake(
     request: Request,
     payload: PairingHandshakeRequest
 ):
@@ -336,7 +341,7 @@ async def pairing_handshake(
 
 
 @router.get("/verify-chunk")
-async def verify_chunk_explicit(
+def verify_chunk_explicit(
     segment_id: str,
     sha256: str,
     file_size: Optional[int] = None,
@@ -428,7 +433,7 @@ def verify_file_integrity(filepath: Path, expected_size: int, expected_sha256: s
 
 
 @router.post("/reconcile")
-async def reconcile_manifest(payload: ReconcileRequest):
+def reconcile_manifest(payload: ReconcileRequest):
     """Bidirectional reconciliation: phone sends manifest, laptop returns exact verified states & offsets.
     CRITICAL INVARIANT: NEVER tell phone a segment is VERIFIED unless:
     1. The exact file exists on disk and BOTH file_size and SHA-256 hash match the manifest, OR
@@ -514,7 +519,7 @@ async def reconcile_manifest(payload: ReconcileRequest):
 
 
 @router.get("/youtube-ack")
-async def verify_youtube_ingestion_acknowledgement(
+def verify_youtube_ingestion_acknowledgement(
     video_id: Optional[str] = None,
     dispatch_id: Optional[str] = None,
     segment_id: Optional[str] = None,

@@ -58,7 +58,15 @@ import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges, keptDuration,
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
-import { executeClipApproval } from '../lib/approval';
+import {
+  executeClipApproval,
+  executeTimelineCommit,
+  deriveDefaultPublishSelection,
+  resolveSelectedAccountsMap,
+  buildPrimaryAccountMap,
+  resolvePublishRoute,
+  buildApprovalIdempotencyKey,
+} from '../lib/approval';
 import { shouldStopSourcePlayback } from '../captions/timelineInteraction';
 import { FilmstripData, normalizeFilmstripPayload, thumbnailFallbackFilmstrip } from '../captions/filmstrip';
 import { computeContextWindow } from '../captions/MiniFilmstrip';
@@ -1777,6 +1785,8 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['youtube_shorts']);
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [selectedAccountMap, setSelectedAccountMap] = useState<Record<string, string>>({});
+  const hasManualPublishSelectionRef = useRef<boolean>(false);
+  const currentClipRef = useRef<ClipItem | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle');
   const [lastFailedAction, setLastFailedAction] = useState<'timeline' | 'captions' | null>(null);
   const lastFailedTimelineCommitRef = useRef<{
@@ -1794,38 +1804,54 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const probedYouTubeIdsRef = useRef<Set<string>>(new Set());
   const filmstripCacheRef = useRef<Map<string, FilmstripData>>(new Map());
 
-  useEffect(() => {
-    import('../auth/supabase').then(({ currentSession }) =>
-      currentSession().then(sess => {
-        if (sess?.access_token) {
-          listConnectedAccounts(sess.access_token).then(accs => {
-            if (accs === null) return; // transient fetch failure: skip preselect this render
-            setConnectedAccounts(accs);
-            const initialPlatforms: string[] = [];
-            const initialMap: Record<string, string> = {};
-            const yt = accs.find(a => a.provider === 'youtube');
-            if (yt) {
-              initialPlatforms.push('youtube_shorts');
-              initialMap['youtube_shorts'] = yt.account_id;
-            }
-            const ig = accs.find(a => a.provider === 'instagram');
-            if (ig) {
-              initialPlatforms.push('instagram');
-              initialMap['instagram'] = ig.account_id;
-            }
-            const li = accs.find(a => a.provider === 'linkedin');
-            if (li) initialMap['linkedin'] = li.account_id;
-            const tw = accs.find(a => a.provider === 'twitter');
-            if (tw) initialMap['x'] = tw.account_id;
-
-            if (initialPlatforms.length > 0) {
-              setSelectedPlatforms(initialPlatforms);
-            }
-            setSelectedAccountMap(initialMap);
-          });
-        }
-      }));
+  const refreshConnectedAccounts = useCallback(async () => {
+    try {
+      const { currentSession } = await import('../auth/supabase');
+      const sess = await currentSession();
+      if (!sess?.access_token) return;
+      const accs = await listConnectedAccounts(sess.access_token);
+      if (accs === null) return; // transient fetch failure: keep existing accounts
+      setConnectedAccounts(accs);
+    } catch {
+      // Offline or unauthenticated
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshConnectedAccounts();
+    const unsubAuth = Bridge.addAuthCallbackListener((data) => {
+      if (data.status === 'success' || data.status === 'callback') {
+        void refreshConnectedAccounts();
+      }
+    });
+    return () => unsubAuth();
+  }, [refreshConnectedAccounts]);
+
+  useEffect(() => {
+    if (isActive) {
+      void refreshConnectedAccounts();
+    }
+  }, [isActive, refreshConnectedAccounts]);
+
+  useEffect(() => {
+    if (connectedAccounts.length === 0) return;
+    const primaryMap = buildPrimaryAccountMap(connectedAccounts);
+    if (!hasManualPublishSelectionRef.current) {
+      const defaults = deriveDefaultPublishSelection(connectedAccounts, currentClipRef.current);
+      setSelectedPlatforms(defaults.selectedPlatforms);
+      setSelectedAccountMap(defaults.selectedAccountMap);
+      return;
+    }
+    setSelectedAccountMap((prev) => {
+      const next = { ...primaryMap };
+      for (const [slotId, accId] of Object.entries(prev)) {
+        if (accId && connectedAccounts.some((a) => a.account_id === accId)) {
+          next[slotId] = accId;
+        }
+      }
+      return next;
+    });
+  }, [connectedAccounts]);
   const [playbackFeedback, setPlaybackFeedback] = useState<string | null>(null);
   const previewAnimRef = useRef<{ active: boolean; restoreTime: number; endTime: number } | null>(null);
   interface ContextPreviewState {
@@ -1868,6 +1894,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     () => allClips.find((c) => c.id === selectedClipId) || null,
     [allClips, selectedClipId]
   );
+  currentClipRef.current = currentClip;
+
+  // Reset publish platform & account selection cleanly whenever switching clips so
+  // one clip's manual platform/account choice never leaks onto another clip.
+  useEffect(() => {
+    hasManualPublishSelectionRef.current = false;
+    setLastFailedAction(null);
+    lastFailedTimelineCommitRef.current = null;
+    if (!currentClip) {
+      setSelectedPlatforms(['youtube_shorts']);
+      setSelectedAccountMap(buildPrimaryAccountMap(connectedAccounts));
+      return;
+    }
+    const defaults = deriveDefaultPublishSelection(connectedAccounts, currentClip);
+    setSelectedPlatforms(defaults.selectedPlatforms);
+    setSelectedAccountMap(defaults.selectedAccountMap);
+  }, [currentClip?.id]);
 
   // Real audio waveform fetch from PC backend when speech cleanup workspace is open
   useEffect(() => {
@@ -3488,15 +3531,19 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('dispatch_default_template', JSON.stringify(templateData));
       }
-      await fetch(apiUrl('/api/template/default', pcHost), {
+      const res = await fetch(apiUrl('/api/template/default', pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(templateData),
       });
-      setTemplateSaveFeedback('Saved as default template!');
+      if (!res.ok) {
+        setTemplateSaveFeedback(`Saved locally; PC sync failed (HTTP ${res.status})`);
+      } else {
+        setTemplateSaveFeedback('Saved as default template!');
+      }
       setTimeout(() => setTemplateSaveFeedback(null), 2500);
     } catch {
-      setTemplateSaveFeedback('Saved default locally');
+      setTemplateSaveFeedback('Saved default locally (PC offline)');
       setTimeout(() => setTemplateSaveFeedback(null), 2500);
     }
   };
@@ -3555,6 +3602,11 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                   : c
               )
             );
+          } else {
+            const errJson = await res.json().catch(() => null);
+            const detail = errJson?.detail || errJson?.error || `HTTP ${res.status}`;
+            console.warn('Failed to persist layout framing mode:', detail);
+            setFeedback(`Could not save framing mode (${detail}).`);
           }
         }).catch((e) => {
           console.warn('Failed to persist layout framing mode:', e);
@@ -3766,14 +3818,24 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   const handleSaveCaptions = async (): Promise<boolean> => {
     if (offlineReadOnly) {
       setSaveStatus('error');
+      setLastFailedAction('captions');
       setFeedback('Reconnect to save caption edits.');
       return false;
     }
     if (!currentClip) return false;
-    if (!captionTrack) return true;
+    if (!captionTrack) {
+      if (captionLoadingState === 'error' || saveStatus === 'error') {
+        setSaveStatus('error');
+        setLastFailedAction('captions');
+        setFeedback('Captions failed to load. Reload captions before saving.');
+        return false;
+      }
+      return true;
+    }
     if (captionTrack.clip_id && captionTrack.clip_id !== currentClip.id) {
       console.error(`Refusing to save caption track: clip_id mismatch (${captionTrack.clip_id} !== ${currentClip.id})`);
       setSaveStatus('error');
+      setLastFailedAction('captions');
       setFeedback('Error: Caption track mismatch. Refusing to overwrite another clip.');
       return false;
     }
@@ -3800,6 +3862,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         if (res.status === 409) {
           // Another device saved a newer track while this editor was open.
           setSaveStatus('error');
+          setLastFailedAction('captions');
           setFeedback('Captions changed on another device. Reopen this clip to load the latest track.');
           return false;
         }
@@ -3810,11 +3873,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             cloudCaptionsRevisionRef.current.set(currentClip.id, Math.floor(nextRevision));
           }
           setSaveStatus('saved');
+          setLastFailedAction(null);
           setFeedback('Captions saved to Dispatch Cloud.');
           setTimeout(() => setFeedback(null), 2500);
           return true;
         }
-        throw new Error(`Cloud returned HTTP ${res.status}`);
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || errData?.detail || `Cloud returned HTTP ${res.status}`);
       }
       const baseRevision = localCaptionsRevisionRef.current.get(currentClip.id)
         ?? Number(currentClip.captions_revision ?? 0);
@@ -3825,6 +3890,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       });
       if (res.status === 409) {
         setSaveStatus('error');
+        setLastFailedAction('captions');
         setFeedback('Captions changed on another device. Reopen this clip to load the latest track.');
         return false;
       }
@@ -3840,12 +3906,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         setTimeout(() => setFeedback(null), 2500);
         return true;
       } else {
-        throw new Error(`Server returned HTTP ${res.status}`);
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.detail || errData?.error || `Server returned HTTP ${res.status}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       setSaveStatus('error');
       setLastFailedAction('captions');
-      setFeedback('Failed to save captions to server. Click Retry Save.');
+      setFeedback(`Failed to save captions (${e?.message || 'network error'}). Click Retry Save.`);
       return false;
     }
   };
@@ -3953,7 +4020,6 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
     if (!currentClip) return false;
 
-    const previousClip = { ...currentClip };
     const sourceDuration = Number(currentClip.source_duration || currentClip.end_time || 60.0);
 
     try {
@@ -4021,6 +4087,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       const newStart = rangeOverrides?.start_time ?? canonical[0][0];
       const newEnd = rangeOverrides?.end_time ?? canonical[canonical.length - 1][1];
 
+      // Keep segments_revision at baseRevision until server confirmation so retries do
+      // not send a prematurely bumped revision and trigger false 409 conflicts.
       const updatedClip = {
         ...currentClip,
         start_time: newStart,
@@ -4029,139 +4097,80 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         kept_duration: newKeptDuration,
         project_document: updatedProjectDoc,
         caption_source_origin: captionSourceOrigin,
-        segments_revision: baseRevision + 1,
+        segments_revision: baseRevision,
         can_undo: true,
         can_redo: false,
       };
 
-      // Optimistic update: instantly apply new duration and segments in UI
+      // Optimistic update: preserve user edits in memory while persistence runs
       setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
       setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? updatedClip : c)));
       setDuration(newKeptDuration);
-      if (feedbackMsg) setFeedback(feedbackMsg);
+      setSaveStatus('saving');
 
-      // 1. Local PC Mode persistence (when running against local workstation daemon)
-      if (!isCloudMode && pcHost) {
-        try {
-          const pcRes = await fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/timeline`, pcHost), {
-            method: 'PUT',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-              expected_revision: baseRevision,
-              base_revision: baseRevision,
-              project_document: updatedProjectDoc,
-              operation_id: operationId,
-              action_type: actionType,
-            }),
-          });
-          if (pcRes.ok) {
-            const pcData = await pcRes.json().catch(() => ({}));
-            const rev = pcData?.revision ?? pcData?.segments_revision ?? (baseRevision + 1);
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-            setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-            setSaveStatus('saved');
-            setLastFailedAction(null);
-            lastFailedTimelineCommitRef.current = null;
-
-            if (actionType === 'trim_edge') {
-              captionTrackCache.delete(currentClip.id);
-              fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/captions`, pcHost), {
-                headers: getAuthHeaders(),
-              })
-                .then((r) => (r.ok ? r.json() : null))
-                .then((newTrackData) => {
-                  if (newTrackData && Array.isArray(newTrackData.groups) && newTrackData.groups.length > 0) {
-                    const norm = normalizeCaptionTrack(newTrackData, currentClip.id, newKeptDuration);
-                    setCaptionTrack(norm, false);
-                  }
-                })
-                .catch(() => {});
-            }
-
-            return true;
-          }
-        } catch {
-          // PC daemon offline or unreachable, fall through to cloud/offline cache
-        }
-      }
-
-      // 2. Dispatch Cloud persistence
-      const session = await currentSession();
+      const session = await currentSession().catch(() => null);
       const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-      if (token && (isCloudMode || currentClip.cloud_id)) {
-        const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            expected_revision: baseRevision,
-            base_revision: baseRevision,
-            document: updatedProjectDoc,
-            project_document: updatedProjectDoc,
-            operation_id: operationId,
-            action_type: actionType,
-          }),
-        });
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          const conflictRev = typeof errData?.revision === 'number' ? errData.revision : (typeof errData?.segments_revision === 'number' ? errData.segments_revision : null);
-          if (res.status === 409 && conflictRev !== null) {
-            setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
-            setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: conflictRev } : c)));
+      const commitResult = await executeTimelineCommit({
+        clipId: currentClip.id,
+        cloudId: currentClip.cloud_id,
+        baseRevision,
+        projectDocument: updatedProjectDoc,
+        operationId,
+        actionType,
+        isCloudMode,
+        isPcOnline,
+        pcHost,
+        token,
+        workerBase: WORKER_BASE,
+        getAuthHeaders,
+        apiUrl,
+      });
 
-            // Transparent single-flight retry using server's current revision
-            const retryRes = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(currentClip.id)}/timeline`, {
-              method: 'PUT',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                expected_revision: conflictRev,
-                base_revision: conflictRev,
-                document: updatedProjectDoc,
-                project_document: updatedProjectDoc,
-                operation_id: `op_${actionType}_retry_${Date.now()}`,
-                action_type: actionType,
-              }),
-            });
-
-            if (retryRes.ok) {
-              const retryData = await retryRes.json().catch(() => ({}));
-              const rev = retryData.revision ?? retryData.segments_revision ?? (conflictRev + 1);
-              setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-              setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-              setSaveStatus('saved');
-              setLastFailedAction(null);
-              lastFailedTimelineCommitRef.current = null;
-              return true;
-            }
-          }
-          throw new Error(errData?.detail || errData?.error || `Cloud save failed (${res.status})`);
-        }
-
-        const cloudData = await res.json().catch(() => ({}));
-        const rev = cloudData.revision ?? cloudData.segments_revision;
-        if (rev) {
-          setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: rev } : c)));
-        }
+      if (!commitResult.success) {
+        throw new Error(commitResult.error || `Could not save ${actionType} edits`);
       }
 
+      const nextRev = commitResult.revision ?? (baseRevision + 1);
+      setReadyClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: nextRev } : c)));
+      setApprovedClips((prev) => prev.map((c) => (c.id === currentClip.id ? { ...c, segments_revision: nextRev } : c)));
       setSaveStatus('saved');
       setLastFailedAction(null);
       lastFailedTimelineCommitRef.current = null;
+      if (feedbackMsg) setFeedback(feedbackMsg);
+
+      if (commitResult.route === 'pc_workstation' && actionType === 'trim_edge' && pcHost) {
+        captionTrackCache.delete(currentClip.id);
+        fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/captions`, pcHost), {
+          headers: getAuthHeaders(),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error(`Caption reload returned HTTP ${r.status}`);
+            return r.json();
+          })
+          .then((newTrackData) => {
+            if (newTrackData && Array.isArray(newTrackData.groups) && newTrackData.groups.length > 0) {
+              const norm = normalizeCaptionTrack(newTrackData, currentClip.id, newKeptDuration);
+              setCaptionTrack(norm, false);
+            }
+          })
+          .catch((capErr) => {
+            console.warn('Caption refresh after trim failed:', capErr);
+          });
+      }
+
       return true;
     } catch (err: any) {
       console.error(`Timeline commit failed (${actionType}):`, err);
-      // Resilient preservation: keep user edits optimistically applied in memory and mark unsaved
-      setSaveStatus('unsaved');
+      // Fail closed: keep edits in memory so the user can retry without losing work,
+      // mark saveStatus='error' so Retry Save is shown, and return false so callers
+      // (such as Auto-Cut drawer) keep proposals/drawer open.
+      setSaveStatus('error');
       setLastFailedAction('timeline');
       lastFailedTimelineCommitRef.current = { newRanges, actionType, feedbackMsg, rangeOverrides };
-      setFeedback(`Changes kept locally. Auto-cut applied (${newRanges.length} segments).`);
-      return true;
+      const errMsg = err?.message || 'network error';
+      setFeedback(`Save failed (${errMsg}). Edits kept locally — tap Retry Save.`);
+      return false;
     }
   };
 
@@ -4443,103 +4452,134 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     setAutoCutLoading(true);
     setFeedback(forceRefresh ? 'Re-analyzing speech with Gemini Flash-Lite...' : 'Analyzing speech with Gemini Flash-Lite & audio waveform...');
 
-    const localProposals = generateLocalAutoCutProposals();
-
-    // 1. Direct Phone-to-Gemini Flash-Lite Request (Zero PC server dependency)
-    let geminiProposals: AutoCutProposal[] = [];
     try {
-      const session = await currentSession().catch(() => null);
-      const token = session?.access_token || null;
-      const geminiKey = await getGeminiApiKey(token);
+      const localProposals = generateLocalAutoCutProposals();
+      const analysisErrors: string[] = [];
 
-      if (geminiKey && allWords.length > 0) {
-        setFeedback('AI analyzing Hindi/Hinglish speech directly on device...');
-        geminiProposals = await analyzeSpeechWithGeminiFlashLite(
-          allWords,
-          geminiKey,
-          clipStartSec,
-          clipEndSec
-        );
-      }
-    } catch (err) {
-      console.warn('Direct Gemini Flash-Lite speech cleanup fallback to local:', err);
-    }
-
-    // 2. PC Backend Waveform Proposals (if connected to PC backend)
-    let pcProposals: AutoCutProposal[] = [];
-    if (!isCloudMode && pcHost) {
+      // 1. Direct Phone-to-Gemini Flash-Lite Request (Zero PC server dependency)
+      let geminiProposals: AutoCutProposal[] = [];
       try {
         const session = await currentSession().catch(() => null);
-        const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
-        const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/autocut/proposals`, pcHost), {
-          headers: authHeaders,
-        });
-        if (res.ok) {
-          const data = await res.json();
-          pcProposals = (data.proposals || []).map((p: any, idx: number) => ({
-            id: p.id || `pc_${idx + 1}`,
-            type: p.type || 'filler',
-            source_start: roundMs(Number(p.source_start ?? p.start ?? 0)),
-            source_end: roundMs(Number(p.source_end ?? p.end ?? 0)),
-            duration: roundMs(Number(p.duration ?? ((p.source_end ?? 0) - (p.source_start ?? 0)))),
-            reason: p.reason || 'PC waveform & transcript detection',
-            confidence: Number(p.confidence ?? 0.88),
-            decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE' ? p.decision : 'REVIEW') as any,
-            word: p.word,
-          }));
-        }
-      } catch (err) {
-        console.warn('PC backend autocut proposals fetch fallback:', err);
-      }
-    }
+        const token = session?.access_token || null;
+        const geminiKey = await getGeminiApiKey(token);
 
-    // 3. Android Native Bridge Waveform Proposals (if running on Android with local media)
-    let bridgeProposals: AutoCutProposal[] = [];
-    const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
-    const mediaPath = (currentClip as any)?.local_path || (currentClip as any)?.source_video_path || (currentClip as any)?.filepath;
-    if (bridge?.analyzeAudioWaveformAndSilences && mediaPath) {
-      try {
-        const raw = bridge.analyzeAudioWaveformAndSilences(
-          mediaPath,
-          Number(currentClip.start_time ?? 0),
-          Number(currentClip.end_time ?? 1e6)
-        );
-        if (raw && raw !== '[]') {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            bridgeProposals = parsed;
+        if (geminiKey && allWords.length > 0) {
+          setFeedback('AI analyzing Hindi/Hinglish speech directly on device...');
+          geminiProposals = await analyzeSpeechWithGeminiFlashLite(
+            allWords,
+            geminiKey,
+            clipStartSec,
+            clipEndSec
+          );
+        }
+      } catch (err: any) {
+        const msg = err?.message || 'Gemini AI analysis failed';
+        console.warn('Direct Gemini Flash-Lite speech cleanup fallback to local:', err);
+        analysisErrors.push(msg);
+      }
+
+      // 2. PC Backend Waveform Proposals (if connected to PC backend)
+      let pcProposals: AutoCutProposal[] = [];
+      if (!isCloudMode && pcHost && isPcOnline !== false) {
+        try {
+          const session = await currentSession().catch(() => null);
+          const token = session?.access_token || (typeof window !== 'undefined' ? (window as any).DispatchBridge?.getAuthToken?.() : null);
+          const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
+          const res = await fetch(apiUrl(`/api/clips/${encodeURIComponent(currentClip.id)}/autocut/proposals`, pcHost), {
+            headers: authHeaders,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            pcProposals = (data.proposals || []).map((p: any, idx: number) => ({
+              id: p.id || `pc_${idx + 1}`,
+              type: p.type || 'filler',
+              source_start: roundMs(Number(p.source_start ?? p.start ?? 0)),
+              source_end: roundMs(Number(p.source_end ?? p.end ?? 0)),
+              duration: roundMs(Number(p.duration ?? ((p.source_end ?? 0) - (p.source_start ?? 0)))),
+              reason: p.reason || 'PC waveform & transcript detection',
+              confidence: Number(p.confidence ?? 0.88),
+              decision: (p.decision === 'AUTO-REMOVE' || p.decision === 'PRESERVE' ? p.decision : 'REVIEW') as any,
+              word: p.word,
+            }));
+          } else {
+            const errJson = await res.json().catch(() => null);
+            const detail = errJson?.detail || errJson?.error || `PC waveform analysis failed (HTTP ${res.status})`;
+            console.warn('PC backend autocut proposals error:', detail);
+            analysisErrors.push(detail);
           }
+        } catch (err: any) {
+          const msg = err?.message || 'PC waveform analysis unreachable';
+          console.warn('PC backend autocut proposals fetch fallback:', err);
+          analysisErrors.push(msg);
         }
-      } catch (err) {
-        console.warn('Native AutoCut waveform detection fallback:', err);
       }
+
+      // 3. Android Native Bridge Waveform Proposals (if running on Android with local media)
+      let bridgeProposals: AutoCutProposal[] = [];
+      const bridge = typeof window !== 'undefined' ? (window as any).DispatchBridge : null;
+      const mediaPath = (currentClip as any)?.local_path || (currentClip as any)?.source_video_path || (currentClip as any)?.filepath;
+      if (bridge?.analyzeAudioWaveformAndSilences && mediaPath) {
+        try {
+          const raw = bridge.analyzeAudioWaveformAndSilences(
+            mediaPath,
+            Number(currentClip.start_time ?? 0),
+            Number(currentClip.end_time ?? 1e6)
+          );
+          if (raw && raw !== '[]') {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              bridgeProposals = parsed;
+            }
+          }
+        } catch (err: any) {
+          const msg = err?.message || 'On-device audio analysis failed';
+          console.warn('Native AutoCut waveform detection fallback:', err);
+          analysisErrors.push(msg);
+        }
+      }
+
+      // 4. Hybrid Ensemble & Overlap Deduplication
+      const mergeWithoutOverlap = (base: AutoCutProposal[], incoming: AutoCutProposal[]): AutoCutProposal[] => {
+        const nonOverlapping = incoming.filter((inc) => {
+          return !base.some(
+            (b) =>
+              (inc.source_start < b.source_end && inc.source_end > b.source_start) ||
+              Math.abs(inc.source_start - b.source_start) < 0.25
+          );
+        });
+        return [...base, ...nonOverlapping];
+      };
+
+      // Priority: Gemini AI > PC/Bridge Waveform Acoustic > Local Deterministic
+      let ensemble = geminiProposals;
+      ensemble = mergeWithoutOverlap(ensemble, pcProposals);
+      ensemble = mergeWithoutOverlap(ensemble, bridgeProposals);
+      ensemble = mergeWithoutOverlap(ensemble, localProposals);
+      ensemble.sort((a, b) => a.source_start - b.source_start);
+
+      if (ensemble.length === 0 && analysisErrors.length > 0) {
+        // Do NOT poison cache when remote/native speech analysis failed
+        setAutoCutProposals([]);
+        setFeedback(`Speech analysis failed (${analysisErrors[0]}). Tap Re-analyze to retry.`);
+        return;
+      }
+
+      if (analysisErrors.length === 0) {
+        autoCutCacheRef.current.set(currentClip.id, { signature, proposals: ensemble });
+        writeAutoCutCache(currentClip.id, signature, ensemble);
+      }
+      setAutoCutProposals(ensemble);
+      if (analysisErrors.length > 0) {
+        setFeedback(`Found ${ensemble.length} on-device suggestions (AI/PC unavailable: ${analysisErrors[0]}).`);
+      } else {
+        setFeedback(`Found ${ensemble.length} speech cleanup suggestions (${geminiProposals.length > 0 ? 'AI + ' : ''}on-device).`);
+      }
+    } catch (err: any) {
+      console.error('AutoCut proposal generation failed:', err);
+      setFeedback(`Speech analysis failed (${err?.message || 'unexpected error'}). Tap Re-analyze to retry.`);
+    } finally {
+      setAutoCutLoading(false);
     }
-
-    // 4. Hybrid Ensemble & Overlap Deduplication
-    const mergeWithoutOverlap = (base: AutoCutProposal[], incoming: AutoCutProposal[]): AutoCutProposal[] => {
-      const nonOverlapping = incoming.filter((inc) => {
-        return !base.some(
-          (b) =>
-            (inc.source_start < b.source_end && inc.source_end > b.source_start) ||
-            Math.abs(inc.source_start - b.source_start) < 0.25
-        );
-      });
-      return [...base, ...nonOverlapping];
-    };
-
-    // Priority: Gemini AI > PC/Bridge Waveform Acoustic > Local Deterministic
-    let ensemble = geminiProposals;
-    ensemble = mergeWithoutOverlap(ensemble, pcProposals);
-    ensemble = mergeWithoutOverlap(ensemble, bridgeProposals);
-    ensemble = mergeWithoutOverlap(ensemble, localProposals);
-    ensemble.sort((a, b) => a.source_start - b.source_start);
-
-    autoCutCacheRef.current.set(currentClip.id, { signature, proposals: ensemble });
-    writeAutoCutCache(currentClip.id, signature, ensemble);
-    setAutoCutProposals(ensemble);
-    setFeedback(`Found ${ensemble.length} speech cleanup suggestions (${geminiProposals.length > 0 ? 'AI + ' : ''}on-device).`);
-    setAutoCutLoading(false);
   };
 
   const handleApplyAutoCut = async () => {
@@ -4675,8 +4715,13 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       return;
     }
 
-    const newRanges = deletePiece(ranges, segmentIndex, sourceDuration);
-    await commitTimeline(newRanges, 'delete_piece', `Deleted piece (${newRanges.length} remaining).`);
+    try {
+      const newRanges = deletePiece(ranges, segmentIndex, sourceDuration);
+      await commitTimeline(newRanges, 'delete_piece', `Deleted piece (${newRanges.length} remaining).`);
+    } catch (err: any) {
+      console.warn('Delete piece failed:', err);
+      setFeedback(err?.message || 'Could not delete piece.');
+    }
   };
 
   const handleTrimPiece = useCallback(async (pieceIndex: number, side: 'start' | 'end', newSourceTime: number) => {
@@ -4811,8 +4856,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }, 2200);
   };
 
-  // 5. Approve & Publish Handler (Phone-First On-Device & Cloud Queue)
+  // 5. Approve & Publish Handler (Explicit Mutually-Exclusive Route)
   const handleApprove = async () => {
+    if (isSubmitting) return;
     if (offlineReadOnly) {
       setFeedback('Reconnect to approve and publish.');
       return;
@@ -4820,6 +4866,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     if (!currentClip) return;
     if (!titleDraft.trim()) {
       setFeedback('Clip title cannot be empty.');
+      return;
+    }
+    if (selectedPlatforms.length === 0) {
+      setFeedback('Select at least one publishing destination.');
+      return;
+    }
+    if (lastFailedAction === 'timeline' && lastFailedTimelineCommitRef.current) {
+      setFeedback('Unsaved timeline edits failed to save. Tap Retry Save in the editor before publishing.');
       return;
     }
 
@@ -4830,7 +4884,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     const optimisticMode = publishMode;
     const trackSnapshot = captionTrack;
     const platformsToPublish = selectedPlatforms.map((p) => p === 'youtube_shorts' ? 'youtube' : p).join(',');
-    const accountsMap = { ...selectedAccountMap };
+    const accountsMap = resolveSelectedAccountsMap(selectedPlatforms, selectedAccountMap, connectedAccounts);
     const rev = clipToApprove.range_revision || 0;
 
     // Snapshot pre-approval view state so a failed approve can restore the user's place
@@ -4879,7 +4933,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         ? (localCaptionsRevisionRef.current.get(clipToApprove.id) ?? Number(clipToApprove.captions_revision ?? 0))
         : undefined;
 
-      const result = await executeClipApproval({
+      const approvalParams = {
         clip: clipToApprove,
         optimisticTitle,
         optimisticDescription,
@@ -4893,9 +4947,36 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         bridge,
         workerBase: WORKER_BASE,
         isCloudMode,
+        isPcOnline,
         getAuthHeaders,
         apiUrl,
         localCaptionsRevision: capBaseRevision,
+      };
+
+      // If unsaved/failed caption edits exist and we are taking the cloud_queue route,
+      // persist captions before queueing publishing so cloud renders match the editor.
+      const resolvedRoute = resolvePublishRoute(approvalParams);
+      if (resolvedRoute.route === 'cloud_queue' && (saveStatus === 'unsaved' || saveStatus === 'error') && trackSnapshot) {
+        const saved = await handleSaveCaptions();
+        if (!saved) {
+          restoreToReady('Could not save caption edits before publishing. Retry Save and try again.');
+          return;
+        }
+      }
+
+      const idempotencyKey = buildApprovalIdempotencyKey({
+        clipId: clipToApprove.id,
+        rangeRevision: rev,
+        status: clipToApprove.status,
+        platforms: platformsToPublish,
+        publishMode: optimisticMode,
+        layoutMode: optimisticLayout,
+        accountsMap,
+      });
+
+      const result = await executeClipApproval({
+        ...approvalParams,
+        idempotencyKey,
       });
 
       if (result.success) {
@@ -5169,6 +5250,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   };
 
   const togglePlatform = (pId: string) => {
+    hasManualPublishSelectionRef.current = true;
     setSelectedPlatforms((prev) => (prev.includes(pId) ? prev.filter((p) => p !== pId) : [...prev, pId]));
   };
 
@@ -6100,9 +6182,11 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                                 const publishedPlatforms = new Set(publications.map(p => p.platform));
                                 const remaining = ['youtube_shorts', 'instagram', 'linkedin', 'x'].filter(id => {
                                   const prov = id === 'youtube_shorts' ? 'youtube' : (id === 'x' ? 'twitter' : id);
-                                  return !publishedPlatforms.has(prov);
+                                  if (publishedPlatforms.has(prov)) return false;
+                                  return connectedAccounts.length === 0 || connectedAccounts.some(a => a.provider === prov);
                                 });
                                 if (remaining.length > 0) {
+                                  hasManualPublishSelectionRef.current = true;
                                   setSelectedPlatforms(remaining);
                                 }
                                 setViewMode('publish');
@@ -6358,7 +6442,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             <button
               type="button"
               onClick={async () => {
-                if (saveStatus === 'unsaved') {
+                if (saveStatus === 'unsaved' || saveStatus === 'error') {
                   setShowStudioExitConfirm(true);
                   return;
                 }
@@ -6406,6 +6490,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     const { newRanges, actionType, feedbackMsg, rangeOverrides } = lastFailedTimelineCommitRef.current;
                     const success = await commitTimeline(newRanges, actionType, feedbackMsg, rangeOverrides);
                     if (!success) return;
+                    if (captionTrack) {
+                      const capSaved = await handleSaveCaptions();
+                      if (!capSaved) return;
+                    }
                   } else {
                     const success = await handleSaveCaptions();
                     if (!success) {
@@ -6978,8 +7066,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 <button
                   type="button"
                   onClick={async () => {
-                    const saved = await handleSaveCaptions();
-                    if (saved) {
+                    let ok = true;
+                    if (lastFailedAction === 'timeline' && lastFailedTimelineCommitRef.current) {
+                      const { newRanges, actionType, feedbackMsg, rangeOverrides } = lastFailedTimelineCommitRef.current;
+                      ok = await commitTimeline(newRanges, actionType, feedbackMsg, rangeOverrides);
+                    }
+                    if (ok && captionTrack) {
+                      ok = await handleSaveCaptions();
+                    }
+                    if (ok) {
                       setShowStudioExitConfirm(false);
                       setViewMode('detail');
                       setSelectedGroupId(null);
@@ -7149,7 +7244,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                             <button
                               key={acc.id}
                               type="button"
-                              onClick={() => setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }))}
+                              onClick={() => {
+                                hasManualPublishSelectionRef.current = true;
+                                setSelectedAccountMap(prev => ({ ...prev, [p.id]: acc.account_id }));
+                              }}
                               className={`px-2 py-0.5 rounded-lg text-xs font-medium border transition-all ${
                                 chosenAccountId === acc.account_id
                                   ? 'bg-primary text-white border-primary font-semibold'

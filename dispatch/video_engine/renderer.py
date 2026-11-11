@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dispatch.config import CLIPS_DIR, PROCESSING_DIR, MAX_CLIP_DURATION, MIN_CLIP_DURATION
+from dispatch.transcription.subprocess_utils import low_priority_subprocess_kwargs
 from dispatch.video_engine.subtitle_generator import generate_ass_subtitles
 from dispatch.video_engine.reframer import build_filter_complex
 from dispatch.video_engine.silence import (
@@ -294,7 +295,14 @@ def render_clip(
 
     logger.info("Executing FFmpeg atomic render for clip %s (%.1fs - %.1fs, effective: %.1fs)",
                 clip_id, start_time, end_time, eff_duration)
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=300)
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=300,
+        **low_priority_subprocess_kwargs(),
+    )
 
     if result.returncode != 0:
         error_msg = result.stderr.strip()
@@ -346,7 +354,13 @@ def render_clip(
         "-q:v", "2",
         str(temp_thumb_path)
     ]
-    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    thumb_res = subprocess.run(
+        thumb_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        **low_priority_subprocess_kwargs(),
+    )
     if thumb_res.returncode == 0 and temp_thumb_path.exists():
         temp_thumb_path.replace(output_thumb_path)
     elif temp_thumb_path.exists():
@@ -464,7 +478,14 @@ def slice_clean_clip(
 
     logger.info("Executing clean slice for clip %s (%.1fs - %.1fs, duration: %.1fs)",
                 clip_id, start_time, end_time, eff_duration)
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=300)
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=300,
+        **low_priority_subprocess_kwargs(),
+    )
 
     if result.returncode != 0:
         error_msg = result.stderr.strip()
@@ -502,7 +523,13 @@ def slice_clean_clip(
         "-q:v", "2",
         str(temp_thumb_path)
     ]
-    thumb_res = subprocess.run(thumb_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    thumb_res = subprocess.run(
+        thumb_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        **low_priority_subprocess_kwargs(),
+    )
     if thumb_res.returncode == 0 and temp_thumb_path.exists():
         temp_thumb_path.replace(output_thumb_path)
     elif temp_thumb_path.exists():

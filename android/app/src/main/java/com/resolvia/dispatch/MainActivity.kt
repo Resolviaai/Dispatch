@@ -484,7 +484,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         val uri: Uri = intent?.data ?: return
-        android.util.Log.i("MainActivity", "Handling deep link intent URI: $uri")
+        android.util.Log.i("MainActivity", "Handling deep link intent: scheme=${uri.scheme?.lowercase() ?: ""} host=${uri.host?.lowercase() ?: ""} path=${uri.path ?: ""}")
         val scheme = uri.scheme?.lowercase() ?: ""
         val host = uri.host?.lowercase() ?: ""
 
@@ -542,7 +542,7 @@ class MainActivity : ComponentActivity() {
                 put("raw_url", uri.toString())
             }
 
-            android.util.Log.i("MainActivity", "Dispatching OAuth callback to bridge: $payload")
+            android.util.Log.i("MainActivity", "Dispatching OAuth callback to bridge: provider=$provider status=$status")
             if (::bridge.isInitialized) {
                 bridge.dispatchAuthCallback(payload.toString())
             } else {

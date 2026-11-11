@@ -142,8 +142,9 @@ def start_dispatch(run_web: bool = True):
     except Exception as e:
         logger.error("Boot crash recovery encountered error: %s", e)
 
-    # 3. Adjust process priority to low/background to prevent laptop freezing
-    governor.set_low_process_priority()
+    # 3. Keep the main Dispatch / Uvicorn server process at normal OS priority so
+    # HTTP/WebView UI routes stay responsive; spawned FFmpeg/ffprobe child
+    # processes drop to BELOW_NORMAL individually via subprocess_utils.
 
     # 4. Verify FFmpeg
     if not shutil.which("ffmpeg"):

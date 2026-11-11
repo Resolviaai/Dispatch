@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
+from dispatch.youtube_connections import atomic_write_token_file as _atomic_write_token_file
+
 logger = logging.getLogger("dispatch.youtube_inbox.oauth")
 
 # Regex to extract dispatch_id from YouTube description or tags
@@ -133,8 +135,7 @@ def get_youtube_service(token_path: Optional[Path] = None):
                 try:
                     creds.refresh(GoogleAuthRequest())
                     if hasattr(creds, "to_json"):
-                        with open(token_file, "w", encoding="utf-8") as f:
-                            f.write(creds.to_json())
+                        _atomic_write_token_file(token_file, creds.to_json())
                         logger.info("Refreshed and persisted YouTube OAuth token to %s", token_file)
                 except Exception as refresh_err:
                     logger.debug("YouTube OAuth token could not be refreshed (will use cloud auth): %s", refresh_err)
@@ -459,11 +460,35 @@ def get_youtube_processing_status(video_ids: List[str], user_id: Optional[str] =
     service = get_youtube_service()
     if not service and user_id:
         try:
-            from dispatch.youtube_connections import get_user_refresh_token
+            from dispatch.youtube_connections import get_youtube_status_via_worker
+            worker_videos = get_youtube_status_via_worker(list(video_ids), user_id=user_id)
+            if worker_videos:
+                mapped: Dict[str, Dict[str, Any]] = {}
+                for vid, info in worker_videos.items():
+                    if not isinstance(info, dict):
+                        continue
+                    st = info.get("status") if isinstance(info.get("status"), dict) else {}
+                    pr = info.get("processingDetails") if isinstance(info.get("processingDetails"), dict) else {}
+                    cd = info.get("contentDetails") if isinstance(info.get("contentDetails"), dict) else {}
+                    mapped[vid] = {
+                        "video_id": vid,
+                        "upload_status": info.get("upload_status") or st.get("uploadStatus"),
+                        "processing_status": info.get("processing_status") or (pr.get("processingStatus") if pr else None),
+                        "failure_reason": info.get("failure_reason") or pr.get("processingFailureReason") or st.get("rejectionReason"),
+                        "duration": cd.get("duration") or info.get("duration"),
+                        "title": info.get("title") or "",
+                        "published_at": info.get("published_at") or "",
+                        "privacy_status": info.get("privacy_status") or st.get("privacyStatus") or "unlisted",
+                    }
+                return mapped
+        except Exception as w_err:
+            logger.debug("Worker YouTube status proxy lookup failed for user %s: %s", user_id, w_err)
+        try:
+            from dispatch.youtube_connections import get_user_youtube_access_token
             from dispatch.publisher.youtube import build_youtube_service_from_credentials
-            user_tok = get_user_refresh_token(user_id)
-            if user_tok:
-                service = build_youtube_service_from_credentials({"refresh_token": user_tok})
+            tok_data = get_user_youtube_access_token(user_id)
+            if tok_data and tok_data.get("access_token"):
+                service = build_youtube_service_from_credentials(tok_data)
         except Exception as u_err:
             logger.debug("Could not resolve user-scoped YouTube service for user %s: %s", user_id, u_err)
 

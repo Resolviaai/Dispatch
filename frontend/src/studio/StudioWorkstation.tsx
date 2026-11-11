@@ -19,6 +19,9 @@ import { CaptionTrack, CaptionGroup, StyleConfig, LayoutConfig } from '../captio
 import { applySectionStylesToTrack, StyleSection } from '../captions/applyToAll';
 import { normalizeCaptionTrack, resolveStudioClip, trackForClip } from '../captions/normalizeTrack';
 import { apiUrl, getAuthHeaders } from '../bridge';
+import { ConnectedAccount, listConnectedAccounts } from '../accounts/accountsService';
+import { currentSession } from '../auth/supabase';
+import { buildApprovalIdempotencyKey, buildPrimaryAccountMap, normalizeAccountIdsForPayload } from '../lib/approval';
 
 interface StudioWorkstationProps {
   pcHost: string;
@@ -80,6 +83,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const [isSavingCaptions, setIsSavingCaptions] = useState<boolean>(false);
   const [isRendering, setIsRendering] = useState<boolean>(false);
   const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const prevCollapsedStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
@@ -90,6 +94,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   const clipFetchControllerRef = useRef<AbortController | null>(null);
   const clipFetchSucceededRef = useRef(false);
   const clipListHasItemsRef = useRef(false);
+  const isApprovingRef = useRef<boolean>(false);
+  const isBatchProcessingRef = useRef<boolean>(false);
+  const handleApproveRef = useRef<() => Promise<void>>(async () => {});
+  const handleRejectRef = useRef<(reason?: string) => Promise<void>>(async () => {});
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -190,6 +198,36 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       clipFetchControllerRef.current = null;
     };
   }, [fetchClips, fetchTelemetry]);
+
+  // Load primary connected accounts so workstation approvals bind non-null account_ids
+  useEffect(() => {
+    let cancelled = false;
+    currentSession()
+      .then((sess) => {
+        if (!sess?.access_token || cancelled) return null;
+        return listConnectedAccounts(sess.access_token);
+      })
+      .then((accs) => {
+        if (!cancelled && Array.isArray(accs)) {
+          setConnectedAccounts(accs);
+        }
+      })
+      .catch(() => {
+        // Offline / local-only workstation mode falls back to integrations.youtube.channel_id
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pcHost]);
+
+  const resolvePrimaryAccountIds = useCallback((): Record<string, string> => {
+    const primary = normalizeAccountIdsForPayload(buildPrimaryAccountMap(connectedAccounts));
+    if (!primary.youtube && integrations?.youtube?.connected && integrations.youtube.channel_id) {
+      primary.youtube = integrations.youtube.channel_id;
+      primary.youtube_shorts = integrations.youtube.channel_id;
+    }
+    return primary;
+  }, [connectedAccounts, integrations?.youtube?.connected, integrations?.youtube?.channel_id]);
 
   // 3. Derived current selected clip
   const currentClip = useMemo(() => {
@@ -337,10 +375,10 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
         }
       } else if (e.key === 'a' || e.key === 'A') {
         e.preventDefault();
-        handleApproveCurrentClip();
+        void handleApproveRef.current();
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
-        handleRejectCurrentClip();
+        void handleRejectRef.current();
       } else if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         handleToggleFocusMode();
@@ -362,13 +400,26 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
 
   // 1. Approve Selected Clip
   const handleApproveCurrentClip = async () => {
-    if (!currentClip || isApproving) return;
+    if (!currentClip || isApproving || isApprovingRef.current) return;
     if (isSavingCaptions || !visibleTrack || captionClipId !== currentClip.id || captionLoadState === 'loading' || captionLoadState === 'error') {
       showToast('Load captions successfully before approving this clip.');
       return;
     }
+    isApprovingRef.current = true;
     setIsApproving(true);
     try {
+      const targetPlatforms = currentClip.platform_targets || 'youtube';
+      const accountIds = resolvePrimaryAccountIds();
+      const idempotencyKey = buildApprovalIdempotencyKey({
+        clipId: currentClip.id,
+        rangeRevision: currentClip.range_revision || 0,
+        status: currentClip.status,
+        platforms: targetPlatforms,
+        publishMode,
+        layoutMode: currentClip.layout_mode || '',
+        accountsMap: accountIds,
+      });
+
       const res = await fetch(apiUrl(`/api/clips/${currentClip.id}/approve`, pcHost), {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -376,28 +427,43 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
           title: currentClip.title,
           hashtags: currentClip.hashtags,
           publish_mode: publishMode,
-          platforms: currentClip.platform_targets || 'youtube',
+          platforms: targetPlatforms,
+          account_ids: accountIds,
           layout_mode: currentClip.layout_mode,
           caption_track: visibleTrack,
           range_revision: currentClip.range_revision || 0,
+          idempotency_key: idempotencyKey,
         }),
       });
       if (res.ok) {
+        const resData = await res.json().catch(() => null);
+        if (resData?.status === 'error') {
+          showToast(`Approval failed: ${resData.detail || resData.error || resData.message || 'Unknown error'}`);
+          return;
+        }
         delete metadataDraftsRef.current[currentClip.id];
-        showToast(`Clip Approved: Queued into Publishing Outbox (${publishMode})`);
+        showToast(
+          resData?.idempotent
+            ? (resData.message || 'Clip is already approved.')
+            : `Clip Approved: Queued into Publishing Outbox (${publishMode})`
+        );
         setClips(prev => prev.map(c => c.id === currentClip.id ? { ...c, status: 'approved' } : c));
         // Captions were persisted with the approve payload
         setIsCaptionDirty(false);
         captionDirtyClipIdRef.current = null;
       } else {
-        showToast(`Approval failed (HTTP ${res.status})`);
+        const errData = await res.json().catch(() => null);
+        const detail = errData?.detail || errData?.error || errData?.message;
+        showToast(detail ? `Approval failed: ${detail}` : `Approval failed (HTTP ${res.status})`);
       }
     } catch (err: any) {
       showToast(`Error approving clip: ${err?.message || 'Network error'}`);
     } finally {
+      isApprovingRef.current = false;
       setIsApproving(false);
     }
   };
+  handleApproveRef.current = handleApproveCurrentClip;
 
   // 2. Reject Selected Clip
   const handleRejectCurrentClip = async (reason = 'User rejected') => {
@@ -429,6 +495,7 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
       setIsRejecting(false);
     }
   };
+  handleRejectRef.current = handleRejectCurrentClip;
 
   // 3. Change Framing / Layout Mode
   const handleLayoutChange = async (mode: LayoutMode) => {
@@ -602,53 +669,93 @@ export const StudioWorkstation: React.FC<StudioWorkstationProps> = ({
   };
 
   const handleExecuteBatchConfirm = async () => {
+    if (isBatchProcessing || isBatchProcessingRef.current) return;
     const targetClips = clips.filter(c => selectedIds.has(c.id));
     if (targetClips.length === 0) return;
 
+    isBatchProcessingRef.current = true;
     setIsBatchProcessing(true);
     let successCount = 0;
+    const failures: string[] = [];
+    const primaryAccountIds = resolvePrimaryAccountIds();
 
-    for (const clipItem of targetClips) {
-      try {
-        if (batchModal.actionType === 'approve') {
-          const res = await fetch(apiUrl(`/api/clips/${clipItem.id}/approve`, pcHost), {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-              title: clipItem.title,
-              hashtags: clipItem.hashtags,
-              publish_mode: publishMode,
-              platforms: clipItem.platform_targets || 'youtube',
-              layout_mode: clipItem.layout_mode,
-            }),
-          });
-          if (res.ok) successCount++;
-        } else {
-          const controller = new AbortController();
-          const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
-          let res: Response;
-          try {
-            res = await fetch(apiUrl(`/api/clips/${clipItem.id}/reject`, pcHost), {
+    try {
+      for (const clipItem of targetClips) {
+        try {
+          if (batchModal.actionType === 'approve') {
+            const targetPlatforms = clipItem.platform_targets || 'youtube';
+            const idempotencyKey = buildApprovalIdempotencyKey({
+              clipId: clipItem.id,
+              rangeRevision: clipItem.range_revision || 0,
+              status: clipItem.status,
+              platforms: targetPlatforms,
+              publishMode,
+              layoutMode: clipItem.layout_mode || '',
+              accountsMap: primaryAccountIds,
+            });
+            const res = await fetch(apiUrl(`/api/clips/${clipItem.id}/approve`, pcHost), {
               method: 'POST',
               headers: getAuthHeaders(),
-              body: JSON.stringify({ reason: 'Batch rejection' }),
-              signal: controller.signal,
+              body: JSON.stringify({
+                title: clipItem.title,
+                hashtags: clipItem.hashtags,
+                publish_mode: publishMode,
+                platforms: targetPlatforms,
+                account_ids: primaryAccountIds,
+                layout_mode: clipItem.layout_mode,
+                range_revision: clipItem.range_revision || 0,
+                idempotency_key: idempotencyKey,
+              }),
             });
-          } finally {
-            window.clearTimeout(timeoutId);
+            if (res.ok) {
+              const resData = await res.json().catch(() => null);
+              if (resData?.status === 'error') {
+                failures.push(String(resData.detail || resData.error || 'Approval error'));
+              } else {
+                successCount++;
+              }
+            } else {
+              const errData = await res.json().catch(() => null);
+              failures.push(String(errData?.detail || errData?.error || errData?.message || `HTTP ${res.status}`));
+            }
+          } else {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
+            let res: Response;
+            try {
+              res = await fetch(apiUrl(`/api/clips/${clipItem.id}/reject`, pcHost), {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ reason: 'Batch rejection' }),
+                signal: controller.signal,
+              });
+            } finally {
+              window.clearTimeout(timeoutId);
+            }
+            if (res.ok) {
+              successCount++;
+            } else {
+              const errData = await res.json().catch(() => null);
+              failures.push(String(errData?.detail || errData?.error || `HTTP ${res.status}`));
+            }
           }
-          if (res.ok) successCount++;
+        } catch (err: any) {
+          failures.push(err?.message || 'Network error');
         }
-      } catch {
-        // continue batch
       }
-    }
 
-    setIsBatchProcessing(false);
-    setBatchModal({ isOpen: false, actionType: 'approve' });
-    setSelectedIds(new Set());
-    fetchClips();
-    showToast(`Batch ${batchModal.actionType}: ${successCount} of ${targetClips.length} clips processed`);
+      setBatchModal({ isOpen: false, actionType: 'approve' });
+      setSelectedIds(new Set());
+      fetchClips(true);
+      if (failures.length > 0) {
+        showToast(`Batch ${batchModal.actionType}: ${successCount} of ${targetClips.length} succeeded (${failures[0]})`);
+      } else {
+        showToast(`Batch ${batchModal.actionType}: ${successCount} of ${targetClips.length} clips processed`);
+      }
+    } finally {
+      isBatchProcessingRef.current = false;
+      setIsBatchProcessing(false);
+    }
   };
 
   return (

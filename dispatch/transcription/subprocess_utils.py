@@ -6,8 +6,25 @@ indefinitely because the calls had no timeout (audit 2026-10-27). On deadline th
 child is killed and the error surfaces as a RuntimeError carrying the tool's
 stderr tail, instead of a bare TimeoutExpired ghost the callers must decode.
 """
+import os
 import subprocess
-from typing import List, Sequence
+from typing import Any, Dict, List, Sequence
+
+
+def _lower_posix_child_priority() -> None:
+    """Lower only the spawned child process's scheduling priority on POSIX."""
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
+def low_priority_subprocess_kwargs() -> Dict[str, Any]:
+    """Return Popen/run kwargs that assign BELOW_NORMAL priority strictly to child processes."""
+    if os.name == "nt":
+        below_normal = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000)
+        return {"creationflags": below_normal}
+    return {"preexec_fn": _lower_posix_child_priority}
 
 
 def run_checked(
@@ -35,6 +52,7 @@ def run_checked(
             text=True,
             timeout=timeout_seconds,
             check=False,
+            **low_priority_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired as exc:
         detail = ""

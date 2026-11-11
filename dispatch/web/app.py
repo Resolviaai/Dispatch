@@ -4,6 +4,9 @@ Provides the local PC dashboard for reviewing, approving, and publishing clips.
 import os
 import json
 import asyncio
+import concurrent.futures
+import contextlib
+import inspect
 import psutil
 import logging
 import threading
@@ -40,6 +43,7 @@ from dispatch.config import (
     DISPATCH_TRUST_LAN
 )
 from dispatch import db
+from dispatch.transcription.subprocess_utils import low_priority_subprocess_kwargs
 from dispatch.video_engine.filmstrip import load_filmstrip_payload
 from dispatch.video_engine.autocut import analyze_waveform_and_transcript_autocuts
 from dispatch.video_engine import (
@@ -82,6 +86,47 @@ _BODY_CAP_EXEMPT_PATHS = frozenset({
 })
 _CLIP_MUTATION_LOCKS: Dict[str, Any] = {}
 _CLIP_MUTATION_LOCKS_GUARD = threading.Lock()
+_FFMPEG_CONCURRENCY_LIMIT = 2
+_FFMPEG_SEMAPHORE = threading.BoundedSemaphore(_FFMPEG_CONCURRENCY_LIMIT)
+
+
+@contextlib.contextmanager
+def _acquire_ffmpeg_slot(timeout_seconds: float = 30.0):
+    """Bound concurrent FFmpeg/ffprobe invocations triggered by HTTP routes."""
+    acquired = _FFMPEG_SEMAPHORE.acquire(timeout=timeout_seconds)
+    if not acquired:
+        raise TimeoutError(f"Timed out waiting for FFmpeg concurrency slot after {timeout_seconds:.0f}s")
+    try:
+        yield
+    finally:
+        _FFMPEG_SEMAPHORE.release()
+
+
+def _bounded_ensure_clip_thumbnail(clip_id: str, timeout_seconds: float = 30.0) -> Optional[Path]:
+    with _acquire_ffmpeg_slot(timeout_seconds=timeout_seconds):
+        return ensure_clip_thumbnail(clip_id)
+
+
+def _bounded_populate_clip_media_urls(clip: Dict[str, Any], timeout_seconds: float = 30.0) -> Dict[str, Any]:
+    with _acquire_ffmpeg_slot(timeout_seconds=timeout_seconds):
+        return populate_clip_media_urls(clip)
+
+
+def _bounded_inspect_video_orientation(source_path: Path, timeout_seconds: float = 35.0) -> Dict[str, Any]:
+    from dispatch.ingestion.validator import inspect_video_orientation
+    with _acquire_ffmpeg_slot(timeout_seconds=timeout_seconds):
+        return inspect_video_orientation(source_path)
+
+
+def _bounded_probe_video(media_path: Path, timeout_seconds: float = 90.0):
+    from dispatch.ingestion.validator import probe_video
+    with _acquire_ffmpeg_slot(timeout_seconds=timeout_seconds):
+        return probe_video(media_path)
+
+
+def _bounded_render_clip(*args, **kwargs) -> Dict[str, Any]:
+    with _acquire_ffmpeg_slot(timeout_seconds=60.0):
+        return render_clip(*args, **kwargs)
 
 
 def _get_clip_mutation_lock(clip_id: str) -> Any:
@@ -110,7 +155,9 @@ def _serialize_clip_mutation(handler):
         lock = _get_clip_mutation_lock(clip_id)
         await _acquire_clip_mutation_lock(lock)
         try:
-            return await handler(clip_id, *args, **kwargs)
+            if inspect.iscoroutinefunction(handler):
+                return await handler(clip_id, *args, **kwargs)
+            return await asyncio.to_thread(handler, clip_id, *args, **kwargs)
         finally:
             lock.release()
     return serialized
@@ -521,6 +568,8 @@ def _monitor_youtube_auth(process: subprocess.Popen) -> None:
                 with _YOUTUBE_AUTH_LOCK:
                     _YOUTUBE_AUTH_STATE.clear()
                     _YOUTUBE_AUTH_STATE.update(safe_state)
+                if status == "authenticated":
+                    _clear_integrations_status_cache()
         exit_code = process.wait()
     except Exception:
         exit_code = -1
@@ -613,7 +662,7 @@ class ResolveReconciliationRequest(BaseModel):
 
 
 @app.api_route("/clips/{filename}", methods=["GET", "HEAD"])
-async def get_clip_file(filename: str, request: Request):
+def get_clip_file(filename: str, request: Request):
     """Stream clip video or image thumbnail directly from storage with path traversal protection,
     freshness validation, and HTTP cache invalidation (RFC 9111 ETag & 304 Not Modified).
     """
@@ -645,7 +694,7 @@ async def get_clip_file(filename: str, request: Request):
 
         for cid in cand_ids:
             try:
-                fresh_p = ensure_clip_thumbnail(cid)
+                fresh_p = _bounded_ensure_clip_thumbnail(cid)
                 if fresh_p and fresh_p.exists():
                     target_path = fresh_p
                     break
@@ -708,7 +757,7 @@ async def get_clip_file(filename: str, request: Request):
 
 
 @app.api_route("/download/dispatch.apk", methods=["GET", "HEAD"])
-async def download_android_apk():
+def download_android_apk():
     """Download the native Dispatch Android APK compiled for POCO C65."""
     candidates = [
         ROOT_DIR / "release-out" / "Dispatch.apk",
@@ -732,7 +781,7 @@ async def download_android_apk():
 
 
 @app.get("/api/pipeline/jobs")
-async def get_pipeline_jobs():
+def get_pipeline_jobs():
     """Return live checkpointed jobs with current stage, status, leases, and retry timers."""
     jobs = list(db.get_active_pipeline_jobs())
     try:
@@ -763,7 +812,7 @@ async def get_pipeline_jobs():
 
 
 @app.get("/api/status")
-async def get_system_status():
+def get_system_status():
     """Return system resource metrics and pipeline counters."""
     disk = psutil.disk_usage(str(ROOT_DIR))
     free_gb = round(disk.free / (1024 ** 3), 1)
@@ -923,8 +972,7 @@ def get_clip_framing_context(clip: Dict[str, Any]) -> Dict[str, Any]:
             source_path = None
 
         if source_path and source_path.exists():
-            from dispatch.ingestion.validator import inspect_video_orientation
-            info = inspect_video_orientation(source_path)
+            info = _bounded_inspect_video_orientation(source_path)
             if info.get("valid"):
                 orientation = info.get("orientation", "landscape")
                 source_w = info.get("effective_width") or info.get("width")
@@ -1036,7 +1084,7 @@ def clip_render_is_stale(clip: Dict[str, Any]) -> bool:
 
 
 @app.get("/api/clips")
-async def list_clips(request: Request):
+def list_clips(request: Request):
     """List clips grouped by status with source media URLs and stale render flags."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
@@ -1044,7 +1092,7 @@ async def list_clips(request: Request):
     for c in ready_clips:
         chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
         c["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
-        populate_clip_media_urls(c)
+        _bounded_populate_clip_media_urls(c)
         ctx = get_clip_framing_context(c)
         c["source_orientation"] = ctx["source_orientation"]
         c["source_aspect_ratio"] = ctx["source_aspect_ratio"]
@@ -1095,7 +1143,7 @@ async def list_clips(request: Request):
         for c in published_clips:
             chunk = db.get_chunk_by_id(c.get("chunk_id")) if c.get("chunk_id") else None
             c["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
-            populate_clip_media_urls(c)
+            _bounded_populate_clip_media_urls(c)
             c["published_at"] = str(c.get("published_at") or c.get("approved_at") or c.get("created_at") or "")
             publications = [
                 public_publication(row)
@@ -1133,7 +1181,7 @@ async def list_clips(request: Request):
 
 
 @app.get("/api/clips/{clip_id}")
-async def get_clip_detail(clip_id: str, request: Request):
+def get_clip_detail(clip_id: str, request: Request):
     """Return single clip metadata with source URL and render status."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
@@ -1144,7 +1192,7 @@ async def get_clip_detail(clip_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
     if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
-    populate_clip_media_urls(clip)
+    _bounded_populate_clip_media_urls(clip)
     chunk = db.get_chunk_by_id(clip.get("chunk_id")) if clip.get("chunk_id") else None
     clip["source_duration"] = float(chunk["duration"]) if chunk and chunk.get("duration") else None
     ctx = get_clip_framing_context(clip)
@@ -1167,13 +1215,15 @@ async def get_clip_detail(clip_id: str, request: Request):
 @app.get("/api/clips/{clip_id}/publications")
 async def get_clip_publications(clip_id: str, request: Request):
     """Published destinations with cached metrics refreshed at most once per TTL."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
+    def _load_publications() -> List[Dict[str, Any]]:
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: Clip belongs to another user")
+        return db.get_publications_for_clips([clip_id]).get(clip_id, [])
 
     async def refresh(publication: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -1185,21 +1235,82 @@ async def get_clip_publications(clip_id: str, request: Request):
             logger.info("Stats refresh skipped for publication %s: %s", publication.get("id"), exc)
             return publication
 
-    rows = db.get_publications_for_clips([clip_id]).get(clip_id, [])
+    rows = await asyncio.to_thread(_load_publications)
     refreshed_rows = await asyncio.gather(*(refresh(publication) for publication in rows))
     return {"publications": [public_publication(row) for row in refreshed_rows]}
 
 
+def _enforce_source_media_owner(owner_id: Optional[str], caller_user_id: Optional[str]) -> None:
+    """Enforce owner isolation for authenticated callers while allowing unauthenticated LAN media tags."""
+    if caller_user_id and (not owner_id or owner_id != caller_user_id):
+        raise HTTPException(status_code=403, detail="Forbidden: Access to another user's source media is denied")
+
+
+def _resolve_yt_or_dir_source(
+    media_id: str,
+    caller_user_id: Optional[str],
+) -> Tuple[Optional[Path], Optional[Dict[str, Any]]]:
+    """Safely resolve a yt_* or dir_* source media path with traversal and ownership checks."""
+    raw_id = str(media_id or "").strip()
+    if not raw_id or "/" in raw_id or "\\" in raw_id or ".." in raw_id or "\x00" in raw_id:
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+    clean_yt_id = raw_id[3:].strip() if raw_id.startswith("yt_") else raw_id
+    if not clean_yt_id or "/" in clean_yt_id or "\\" in clean_yt_id or ".." in clean_yt_id or "\x00" in clean_yt_id:
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+    yt_row = db.get_youtube_video(clean_yt_id)
+    dashed = clean_yt_id
+    raw_hex = ""
+    if not yt_row and clean_yt_id.startswith("dir_"):
+        raw_hex = clean_yt_id[4:].replace("-", "")
+        dashed = (
+            f"dir_{raw_hex[:8]}-{raw_hex[8:12]}-{raw_hex[12:16]}-{raw_hex[16:20]}-{raw_hex[20:]}"
+            if len(raw_hex) == 32
+            else clean_yt_id
+        )
+        yt_row = db.get_youtube_video(dashed) or db.get_youtube_video(f"dir_{raw_hex}")
+
+    if yt_row:
+        _enforce_source_media_owner(yt_row.get("user_id"), caller_user_id)
+        if yt_row.get("local_video_path"):
+            yp = Path(yt_row["local_video_path"])
+            if yp.exists() and yp.is_file():
+                return yp, yt_row
+        return None, yt_row
+
+    if clean_yt_id.startswith("dir_"):
+        inbox_root = YOUTUBE_INBOX_DIR.resolve()
+        for name in (f"{clean_yt_id}.mp4", f"{dashed}.mp4", f"dir_{raw_hex}.mp4"):
+            cand = (inbox_root / name).resolve()
+            if not cand.is_relative_to(inbox_root):
+                raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+            if cand.exists() and cand.is_file():
+                if caller_user_id:
+                    raise HTTPException(status_code=403, detail="Forbidden: Access to another user's source media is denied")
+                return cand, None
+
+    return None, None
+
+
 @app.api_route("/api/clips/{clip_id}/source", methods=["GET", "HEAD"])
-async def get_clip_source_media(clip_id: str, request: Request):
+def get_clip_source_media(clip_id: str, request: Request):
     """Safely resolve and stream the original raw source video chunk for this clip or chunk.
     Supports HTTP Range requests (206 Partial Content) for smooth HTML5 video scrubbing
     and conditional RFC 9111 revalidation (ETag, 304 Not Modified).
     """
     caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    if "/" in clip_id or "\\" in clip_id or ".." in clip_id or "\x00" in clip_id:
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
     clip = db.get_clip_by_id(clip_id)
-    if clip and caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
-        raise HTTPException(status_code=403, detail="Forbidden: Access to another user's source media is denied")
+    if clip:
+        owner_id = clip.get("user_id")
+        if not owner_id and clip.get("chunk_id"):
+            parent_chunk = db.get_chunk_by_id(clip["chunk_id"])
+            if parent_chunk:
+                owner_id = parent_chunk.get("user_id")
+        _enforce_source_media_owner(owner_id, caller_user_id)
     source_path = None
     headers = {
         "Accept-Ranges": "bytes",
@@ -1212,28 +1323,22 @@ async def get_clip_source_media(clip_id: str, request: Request):
     else:
         # Check if clip_id is actually a chunk_id
         chunk = db.get_chunk_by_id(clip_id)
-        if chunk and chunk.get("filepath"):
-            cp = Path(chunk["filepath"])
-            if cp.exists():
-                source_path = cp
-                headers["X-Clip-Duration"] = str(chunk.get("duration", 0.0))
+        if chunk:
+            chunk_owner = chunk.get("user_id")
+            if not chunk_owner and str(chunk.get("file_hash") or "").startswith("yt_"):
+                linked_yt = db.get_youtube_video(str(chunk["file_hash"])[3:])
+                if linked_yt:
+                    chunk_owner = linked_yt.get("user_id")
+            _enforce_source_media_owner(chunk_owner, caller_user_id)
+            if chunk.get("filepath"):
+                cp = Path(chunk["filepath"])
+                if cp.exists():
+                    source_path = cp
+                    headers["X-Clip-Duration"] = str(chunk.get("duration", 0.0))
         if not source_path:
-            clean_yt_id = clip_id.replace("yt_", "").strip()
-            yt_row = db.get_youtube_video(clean_yt_id)
-            if not yt_row and clean_yt_id.startswith("dir_"):
-                raw_hex = clean_yt_id[4:].replace("-", "")
-                dashed = f"dir_{raw_hex[:8]}-{raw_hex[8:12]}-{raw_hex[12:16]}-{raw_hex[16:20]}-{raw_hex[20:]}" if len(raw_hex) == 32 else clean_yt_id
-                yt_row = db.get_youtube_video(dashed) or db.get_youtube_video(f"dir_{raw_hex}")
-                if not yt_row:
-                    for cand in [YOUTUBE_INBOX_DIR / f"{clean_yt_id}.mp4", YOUTUBE_INBOX_DIR / f"{dashed}.mp4", YOUTUBE_INBOX_DIR / f"dir_{raw_hex}.mp4"]:
-                        if cand.exists() and cand.is_file():
-                            source_path = cand
-                            break
-            if yt_row and yt_row.get("local_video_path") and not source_path:
-                yp = Path(yt_row["local_video_path"])
-                if yp.exists():
-                    source_path = yp
-                    headers["X-Clip-Duration"] = str(yt_row.get("duration", 0.0))
+            source_path, yt_row = _resolve_yt_or_dir_source(clip_id, caller_user_id)
+            if source_path and yt_row:
+                headers["X-Clip-Duration"] = str(yt_row.get("duration", 0.0))
 
     if not source_path or not source_path.exists():
         raise HTTPException(status_code=404, detail="Source media chunk not found on disk")
@@ -1294,9 +1399,9 @@ async def get_clip_source_media(clip_id: str, request: Request):
 
 
 @app.api_route("/api/recordings/{segment_id}/source", methods=["GET", "HEAD"])
-async def get_recording_source_media(segment_id: str, request: Request):
+def get_recording_source_media(segment_id: str, request: Request):
     """Safely stream the original raw source video chunk for a session segment."""
-    return await get_clip_source_media(segment_id, request)
+    return get_clip_source_media(segment_id, request)
 
 
 def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
@@ -1315,7 +1420,7 @@ def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:
 
 @app.post("/api/clips/{clip_id}/layout")
 @_serialize_clip_mutation
-async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, request: Request):
+def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, request: Request):
     """Persist chosen layout framing mode for a clip immediately."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
@@ -1379,33 +1484,41 @@ async def handle_update_clip_layout(clip_id: str, payload: LayoutModeRequest, re
 @_serialize_clip_mutation
 async def handle_auto_reframe(clip_id: str, request: Request):
     """Analyze clip video with lightweight face tracking and update crop_anchor_x."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+    def _prepare():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
-    vp = clip.get("video_path")
-    cut_path = Path(vp) if vp and Path(vp).exists() else None
-    source_path = cut_path or resolve_clip_source_path(clip)
+        vp = clip.get("video_path")
+        cut_path = Path(vp) if vp and Path(vp).exists() else None
+        source_path = cut_path or resolve_clip_source_path(clip)
+        start_time = 0.0 if cut_path else float(clip.get("start_time") or 0.0)
+        end_time = float(clip.get("duration") or 0.0) if cut_path else float(clip.get("end_time") or 0.0)
+        return source_path, start_time, end_time
 
-    start_time = 0.0 if cut_path else float(clip.get("start_time") or 0.0)
-    end_time = float(clip.get("duration") or 0.0) if cut_path else float(clip.get("end_time") or 0.0)
+    source_path, start_time, end_time = await asyncio.to_thread(_prepare)
 
     from dispatch.video_engine.tracker import detect_subject_crop_anchor
     anchor = 0.5
     if source_path and source_path.exists():
-        anchor = await asyncio.to_thread(detect_subject_crop_anchor, source_path, start_time, end_time, 3)
+        anchor = await asyncio.wait_for(
+            asyncio.to_thread(detect_subject_crop_anchor, source_path, start_time, end_time, 3),
+            timeout=60.0,
+        )
 
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE clips SET crop_anchor_x = ?, layout_mode = 'crop_916' WHERE id = ?", (anchor, clip_id))
-        conn.commit()
+    def _persist():
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE clips SET crop_anchor_x = ?, layout_mode = 'crop_916' WHERE id = ?", (anchor, clip_id))
+            conn.commit()
+        updated_clip = db.get_clip_by_id(clip_id)
+        return get_clip_framing_context(updated_clip)
 
-    updated_clip = db.get_clip_by_id(clip_id)
-    updated_ctx = get_clip_framing_context(updated_clip)
+    updated_ctx = await asyncio.to_thread(_persist)
 
     return {
         "status": "success",
@@ -1421,65 +1534,56 @@ async def handle_auto_reframe(clip_id: str, request: Request):
 @_serialize_clip_mutation
 async def handle_render_clip(clip_id: str, request: Request, payload: Optional[LayoutModeRequest] = None):
     """Explicitly re-render a clip from source media using the current or specified layout_mode."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-    if clip.get("status") != "ready_review":
-        raise HTTPException(status_code=409, detail="Only reviewable clips can be rendered")
+    def _prepare():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+        if clip.get("status") != "ready_review":
+            raise HTTPException(status_code=409, detail="Only reviewable clips can be rendered")
 
-    ctx = get_clip_framing_context(clip)
-    raw_mode = (payload.layout_mode if payload and payload.layout_mode else None) or clip.get("layout_mode") or ctx["layout_mode"]
-    raw_mode = str(raw_mode).strip().lower()
+        ctx = get_clip_framing_context(clip)
+        raw_mode = (payload.layout_mode if payload and payload.layout_mode else None) or clip.get("layout_mode") or ctx["layout_mode"]
+        raw_mode = str(raw_mode).strip().lower()
+        if raw_mode not in ctx["valid_mode_ids"]:
+            raw_mode = ctx["layout_mode"]
+        target_layout = raw_mode
 
-    if raw_mode not in ctx["valid_mode_ids"]:
-        raw_mode = ctx["layout_mode"]
+        source_path = resolve_clip_source_path(clip)
+        if not source_path or not source_path.exists():
+            raise HTTPException(status_code=400, detail="Original source video chunk not found on disk")
 
-    target_layout = raw_mode
+        segments = None
+        if clip.get("caption_data"):
+            try:
+                cap = json.loads(clip["caption_data"])
+                groups = cap.get("groups", [])
+                if groups:
+                    segments = [{"id": g["id"], "start": g["start"], "end": g["end"], "text": g.get("text", ""),
+                                 "words": g.get("words", [])} for g in groups]
+            except Exception:
+                pass
 
-    source_path = resolve_clip_source_path(clip)
-    if not source_path or not source_path.exists():
-        raise HTTPException(status_code=400, detail="Original source video chunk not found on disk")
+        if not segments and clip.get("chunk_id"):
+            with db.get_db_connection() as conn:
+                t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
+                if t_row and t_row["segments_json"]:
+                    try:
+                        segments = json.loads(t_row["segments_json"])
+                    except Exception:
+                        pass
 
-    segments = None
-    if clip.get("caption_data"):
-        try:
-            cap = json.loads(clip["caption_data"])
-            groups = cap.get("groups", [])
-            if groups:
-                segments = [{"id": g["id"], "start": g["start"], "end": g["end"], "text": g.get("text", ""),
-                             "words": g.get("words", [])} for g in groups]
-        except Exception:
-            pass
+        start_t = float(clip["start_time"])
+        end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
+        range_rev = int(clip.get("range_revision") or 0)
+        return ctx, target_layout, source_path, segments, start_t, end_t, range_rev
 
-    if not segments and clip.get("chunk_id"):
-        with db.get_db_connection() as conn:
-            t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
-            if t_row and t_row["segments_json"]:
-                try:
-                    segments = json.loads(t_row["segments_json"])
-                except Exception:
-                    pass
+    ctx, target_layout, source_path, segments, start_t, end_t, range_rev = await asyncio.to_thread(_prepare)
 
-    start_t = float(clip["start_time"])
-    end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
-
-    try:
-        render_res = await asyncio.to_thread(
-            render_clip,
-            source_video=source_path,
-            clip_id=clip_id,
-            start_time=start_t,
-            end_time=end_t,
-            aspect_ratio=ctx["source_aspect_ratio"],
-            layout_mode=target_layout,
-            segments=segments,
-            subtitle_options={"enabled": False, "preserve_timing": True},
-            expected_range_revision=int(clip.get("range_revision") or 0),
-        )
+    def _finish_render(render_res: Dict[str, Any]):
         out_file = Path(render_res["video_path"])
         if not out_file.exists() or out_file.stat().st_size == 0:
             raise RuntimeError("Render output file is missing or zero bytes")
@@ -1489,19 +1593,37 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
         with db.get_db_connection() as conn:
             cursor = conn.execute(
                 "UPDATE clips SET layout_mode = ?, rendered_layout_mode = ?, video_path = ?, thumbnail_path = COALESCE(?, thumbnail_path), render_stale = 0 WHERE id = ? AND range_revision = ?",
-                (target_layout, target_layout, str(out_file), thumb_path_str, clip_id, int(clip.get("range_revision") or 0))
+                (target_layout, target_layout, str(out_file), thumb_path_str, clip_id, range_rev)
             )
             conn.commit()
             if cursor.rowcount != 1:
                 raise HTTPException(status_code=409, detail="Clip range changed while rendering. Reload and retry.")
+        updated_clip = db.get_clip_by_id(clip_id)
+        updated_ctx = get_clip_framing_context(updated_clip)
+        return out_file, thumb_name, updated_ctx
+
+    try:
+        render_res = await asyncio.wait_for(
+            asyncio.to_thread(
+                _bounded_render_clip,
+                source_video=source_path,
+                clip_id=clip_id,
+                start_time=start_t,
+                end_time=end_t,
+                aspect_ratio=ctx["source_aspect_ratio"],
+                layout_mode=target_layout,
+                segments=segments,
+                subtitle_options={"enabled": False, "preserve_timing": True},
+                expected_range_revision=range_rev,
+            ),
+            timeout=360.0,
+        )
+        out_file, thumb_name, updated_ctx = await asyncio.to_thread(_finish_render, render_res)
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
         logger.error("Failed to render clip %s: %s", clip_id, e)
         raise HTTPException(status_code=500, detail=f"Couldn't render selected framing: {str(e)}")
-
-    updated_clip = db.get_clip_by_id(clip_id)
-    updated_ctx = get_clip_framing_context(updated_clip)
 
     return {
         "status": "success",
@@ -1519,7 +1641,7 @@ async def handle_render_clip(clip_id: str, request: Request, payload: Optional[L
 
 @app.post("/api/clips/{clip_id}/trim")
 @_serialize_clip_mutation
-async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Request):
+def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Request):
     """Update clip active trim boundaries (CapCut-style trimming with safety handles)."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
@@ -1539,8 +1661,7 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
     else:
         source_path = resolve_clip_source_path(clip)
         if source_path:
-            from dispatch.ingestion.validator import inspect_video_orientation
-            source_info = inspect_video_orientation(source_path)
+            source_info = _bounded_inspect_video_orientation(source_path)
             if source_info.get("valid") and float(source_info.get("duration") or 0) > 0:
                 source_duration = float(source_info["duration"])
 
@@ -1574,42 +1695,56 @@ async def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, reques
 
 @app.get("/api/clips/{clip_id}/autocut/proposals")
 async def get_autocut_proposals(clip_id: str, request: Request):
-    verify_dashboard_auth(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    def _prepare():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
 
-    clip_start = float(clip.get("start_time") or 0.0)
-    clip_end = float(clip.get("end_time") or (clip_start + 30.0))
-    
-    segments = []
-    cap_data = clip.get("caption_data")
-    if cap_data:
+        clip_start = float(clip.get("start_time") or 0.0)
+        clip_end = float(clip.get("end_time") or (clip_start + 30.0))
+
+        segments = []
+        cap_data = clip.get("caption_data")
+        if cap_data:
+            try:
+                parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
+                groups = parsed.get("groups") or []
+                for g in groups:
+                    segments.append({
+                        "start": g.get("start", 0.0),
+                        "end": g.get("end", 0.0),
+                        "text": g.get("text", ""),
+                        "words": g.get("words", []),
+                    })
+            except Exception:
+                pass
+
+        source_path = None
         try:
-            parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
-            groups = parsed.get("groups") or []
-            for g in groups:
-                segments.append({
-                    "start": g.get("start", 0.0),
-                    "end": g.get("end", 0.0),
-                    "text": g.get("text", ""),
-                    "words": g.get("words", []),
-                })
+            source_path = resolve_clip_source_path(clip)
         except Exception:
             pass
-            
-    source_path = None
-    try:
-        source_path = resolve_clip_source_path(clip)
-    except Exception:
-        pass
+        return source_path, segments, clip_start, clip_end
 
-    proposals = analyze_waveform_and_transcript_autocuts(
-        media_path=source_path,
-        transcript_segments=segments,
-        clip_start=clip_start,
-        clip_end=clip_end,
-    )
+    source_path, segments, clip_start, clip_end = await asyncio.to_thread(_prepare)
+
+    def _run_autocut():
+        with _acquire_ffmpeg_slot(timeout_seconds=30.0):
+            return analyze_waveform_and_transcript_autocuts(
+                media_path=source_path,
+                transcript_segments=segments,
+                clip_start=clip_start,
+                clip_end=clip_end,
+            )
+
+    try:
+        proposals = await asyncio.wait_for(asyncio.to_thread(_run_autocut), timeout=60.0)
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="Auto-cut analysis timed out")
     return {
         "clip_id": clip_id,
         "proposals": proposals,
@@ -1628,67 +1763,76 @@ async def get_clip_waveform(
     """Return normalized real audio waveform RMS amplitude points (0.0 to 1.0)
     for accurate visualization in the speech cleanup mini filmstrip.
     """
-    verify_dashboard_auth(request)
-    clip = db.get_clip_by_id(clip_id)
-    source_path = None
-    clip_start = 0.0
-    clip_end = 0.0
-    
-    if clip:
-        source_path = resolve_clip_source_path(clip)
-        clip_start = float(clip.get("start_time") or 0.0)
-        clip_end = float(clip.get("end_time") or (clip_start + 30.0))
-    else:
-        clean_yt_id = clip_id.replace("yt_", "").strip()
-        yt_row = db.get_youtube_video(clean_yt_id)
-        if not yt_row and clean_yt_id.startswith("dir_"):
-            raw_hex = clean_yt_id[4:].replace("-", "")
-            dashed = f"dir_{raw_hex[:8]}-{raw_hex[8:12]}-{raw_hex[12:16]}-{raw_hex[16:20]}-{raw_hex[20:]}" if len(raw_hex) == 32 else clean_yt_id
-            yt_row = db.get_youtube_video(dashed) or db.get_youtube_video(f"dir_{raw_hex}")
-            if not yt_row:
-                for cand in [YOUTUBE_INBOX_DIR / f"{clean_yt_id}.mp4", YOUTUBE_INBOX_DIR / f"{dashed}.mp4", YOUTUBE_INBOX_DIR / f"dir_{raw_hex}.mp4"]:
-                    if cand.exists() and cand.is_file():
-                        source_path = cand
-                        break
-        if yt_row and yt_row.get("local_video_path") and not source_path:
-            yp = Path(yt_row["local_video_path"])
-            if yp.exists():
-                source_path = yp
+    def _prepare():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        if "/" in clip_id or "\\" in clip_id or ".." in clip_id or "\x00" in clip_id:
+            raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+        clip = db.get_clip_by_id(clip_id)
+        source_path = None
+        clip_start = 0.0
+        clip_end = 0.0
+
+        if clip:
+            if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+                raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+            source_path = resolve_clip_source_path(clip)
+            clip_start = float(clip.get("start_time") or 0.0)
+            clip_end = float(clip.get("end_time") or (clip_start + 30.0))
+        else:
+            source_path, yt_row = _resolve_yt_or_dir_source(clip_id, caller_user_id)
+            if yt_row:
                 clip_end = float(yt_row.get("duration", 0.0))
 
-    if not source_path or not Path(source_path).exists():
-        raise HTTPException(status_code=404, detail="Source media not found for waveform")
+        if not source_path or not Path(source_path).exists():
+            raise HTTPException(status_code=404, detail="Source media not found for waveform")
 
-    win_start = start if start is not None else clip_start
-    win_end = end if end is not None else (clip_end if clip_end > win_start else win_start + 10.0)
-    
-    from dispatch.video_engine.waveform import extract_pcm_samples, compute_rms_profile
-    cache_dir = STORAGE_DIR / "clips" / "waveform_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"{clip_id.replace('-', '_')}.json"
-    
-    profile = None
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                cached_data = json.load(f)
-                profile = cached_data.get("profile")
-        except Exception:
-            profile = None
-            
+        win_start = start if start is not None else clip_start
+        win_end = end if end is not None else (clip_end if clip_end > win_start else win_start + 10.0)
+
+        cache_dir = (STORAGE_DIR / "clips" / "waveform_cache").resolve()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        safe_cache_stem = re.sub(r"[^A-Za-z0-9_.-]", "_", clip_id.replace("-", "_"))
+        cache_file = (cache_dir / f"{safe_cache_stem}.json").resolve()
+        if not cache_file.is_relative_to(cache_dir):
+            raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+
+        profile = None
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    profile = cached_data.get("profile")
+            except Exception:
+                profile = None
+        return Path(source_path), win_start, win_end, cache_file, profile
+
+    source_path, win_start, win_end, cache_file, profile = await asyncio.to_thread(_prepare)
+
     if not profile:
-        raw_bytes, sample_rate, num_samples = await asyncio.to_thread(extract_pcm_samples, Path(source_path), 16000)
-        profile = compute_rms_profile(raw_bytes, sample_rate=16000, frame_duration_ms=50.0)
+        from dispatch.video_engine.waveform import extract_pcm_samples, compute_rms_profile
+
+        def _compute_profile():
+            with _acquire_ffmpeg_slot(timeout_seconds=30.0):
+                raw_bytes, _sample_rate, _num_samples = extract_pcm_samples(source_path, 16000)
+            computed = compute_rms_profile(raw_bytes, sample_rate=16000, frame_duration_ms=50.0)
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump({"clip_id": clip_id, "profile": computed}, f)
+            except Exception:
+                pass
+            return computed
+
         try:
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump({"clip_id": clip_id, "profile": profile}, f)
-        except Exception:
-            pass
+            profile = await asyncio.wait_for(asyncio.to_thread(_compute_profile), timeout=60.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(status_code=504, detail="Waveform extraction timed out")
 
     in_range = [pt for pt in profile if win_start <= pt[0] <= win_end]
     if not in_range:
         in_range = profile[:samples_count]
-        
+
     count = max(10, min(300, samples_count))
     sampled_bars = []
     if len(in_range) <= count:
@@ -1714,7 +1858,7 @@ async def get_clip_waveform(
 
 @app.post("/api/clips/{clip_id}/split")
 @_serialize_clip_mutation
-async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request):
+def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Request):
     """Legacy row-split endpoint is retired in Stage 2.
     Single-library-card segment timeline editing must be performed via mobile."""
     verify_dashboard_auth(request)
@@ -1728,13 +1872,17 @@ async def handle_split_clip(clip_id: str, payload: SplitClipRequest, request: Re
 @_serialize_clip_mutation
 async def handle_update_clip_timeline(clip_id: str, request: Request):
     """Persist mobile timeline edits & project document directly to local database for PC mode."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    def _authorize():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and clip.get("user_id") and clip["user_id"] != caller_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return caller_user_id, clip
+
+    caller_user_id, clip = await asyncio.to_thread(_authorize)
 
     try:
         body = await request.json()
@@ -1757,17 +1905,21 @@ async def handle_update_clip_timeline(clip_id: str, request: Request):
         "action_type": str(body.get("action_type") or "timeline_edit"),
         "author": "mobile",
     }
-    outcome = db.import_cloud_timeline_data(clip_id, timeline_data, expected_user_id=caller_user_id)
-    if outcome in ("applied", "stale"):
-        updated = db.get_clip_by_id(clip_id)
-        return {
-            "status": "success",
-            "ok": True,
-            "revision": updated.get("segments_revision") or next_rev,
-            "segments_revision": updated.get("segments_revision") or next_rev,
-            "project_document": doc,
-        }
-    raise HTTPException(status_code=400, detail=f"Failed to apply timeline: {outcome}")
+
+    def _apply():
+        outcome = db.import_cloud_timeline_data(clip_id, timeline_data, expected_user_id=caller_user_id)
+        if outcome in ("applied", "stale"):
+            updated = db.get_clip_by_id(clip_id)
+            return {
+                "status": "success",
+                "ok": True,
+                "revision": updated.get("segments_revision") or next_rev,
+                "segments_revision": updated.get("segments_revision") or next_rev,
+                "project_document": doc,
+            }
+        raise HTTPException(status_code=400, detail=f"Failed to apply timeline: {outcome}")
+
+    return await asyncio.to_thread(_apply)
 
 
 
@@ -1776,163 +1928,197 @@ async def handle_update_clip_timeline(clip_id: str, request: Request):
 @app.post("/api/clips/{clip_id}/approve")
 @_serialize_clip_mutation
 async def handle_approve_clip(clip_id: str, payload: ApproveRequest, request: Request):
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
+    def _auth_approve():
+        verify_dashboard_auth(request)
+        return resolve_caller_user_id(request)
+
+    caller_user_id = await asyncio.to_thread(_auth_approve)
     return await _approve_clip_with_render(clip_id, payload, caller_user_id=caller_user_id)
 
 
 async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, caller_user_id: Optional[str] = None):
     """Render the submitted caption snapshot and chosen layout before enqueueing publishing."""
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-    if clip.get("status") in ("approved", "published"):
-        return {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}
-    if clip.get("status") != "ready_review":
-        raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
-    _duration = float(clip.get("end_time") or 0) - float(clip.get("start_time") or 0)
-    if _duration < MIN_CLIP_DURATION:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Clip is {_duration:.1f}s — shorter than the {MIN_CLIP_DURATION:.0f}s minimum.",
-        )
-
-    # Cloud caption reconciliation: the phone may have saved newer caption
-    # edits in Dispatch Cloud while this PC was offline. Pull them (monotonic
-    # revision guard, ownership-checked) BEFORE this render decides what
-    # caption data is authoritative, so an offline edit can never be silently
-    # skipped by the final render. Never fatal: on cloud errors the local
-    # state remains what it was.
-    try:
-        import_cloud_captions_for_clip(clip_id)
-        clip = db.get_clip_by_id(clip_id) or clip
-    except Exception as e:
-        logger.warning("Cloud caption reconciliation before approve failed for %s: %s", clip_id, e)
-
-    current_revision = int(clip.get("range_revision") or 0)
-    if payload.range_revision is not None and payload.range_revision != current_revision:
-        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
-
-    ctx = get_clip_framing_context(clip)
-    raw_mode = payload.layout_mode or clip.get("layout_mode") or ctx["layout_mode"]
-    raw_mode = str(raw_mode).strip().lower()
-    if raw_mode not in ctx["valid_mode_ids"]:
-        raw_mode = ctx["layout_mode"]
-
-    target_layout = raw_mode
-    if payload.caption_track is not None:
-        try:
-            caption_track = CaptionTrack.from_dict(payload.caption_track)
-            if caption_track.clip_id and caption_track.clip_id != clip_id:
-                raise ValueError("Caption track belongs to another clip")
-            caption_snapshot = caption_track.to_dict()
-            saved = db.save_clip_caption_data(
-                clip_id, json.dumps(caption_snapshot, ensure_ascii=False),
-                expected_range_revision=current_revision,
-                source_range_start=float(clip["start_time"]),
-                source_range_end=float(clip["end_time"]),
-                timing_warning=payload.caption_track.get("timing_warning"),
-            )
-            if not saved:
-                raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
-            clip = db.get_clip_by_id(clip_id) or clip
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise
-            raise HTTPException(status_code=400, detail=f"Invalid caption track: {e}") from e
-    else:
-        try:
-            caption_snapshot = json.loads(clip["caption_data"]) if clip.get("caption_data") else None
-        except Exception:
-            caption_snapshot = None
-        if caption_snapshot and int(clip.get("caption_range_revision") or 0) != current_revision:
-            raise HTTPException(status_code=409, detail="Saved captions belong to an older clip range. Reload and save captions before approving.")
-
-    if clip.get("caption_timing_warning"):
-        raise HTTPException(status_code=422, detail=str(clip["caption_timing_warning"]))
-    if caption_snapshot:
-        unreliable = [
-            group for group in caption_snapshot.get("groups", [])
-            if (not group.get("type") or group.get("type") == "caption")
-            and (not group.get("has_word_timing", True) or group.get("timing_mode", "word") != "word")
-        ]
-        if unreliable:
-            raise HTTPException(
-                status_code=422,
-                detail="These captions do not have reliable word-level timings. Retry transcription or remove the inexact caption groups before publishing.",
-            )
-
-    source_path = resolve_clip_source_path(clip)
-    if not source_path or not source_path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot approve this clip: original source video is unavailable for final rendering."
-        )
-
-    # Never treat the rendered output as the "original source". Re-rendering from
-    # a previously rendered clip would silently degrade quality and could pick
-    # the wrong coordinate domain.
-    if clip.get("video_path"):
-        try:
-            if Path(clip["video_path"]).resolve() == source_path.resolve():
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot approve this clip: the original source recording is missing; only a rendered copy exists.",
-                )
-        except OSError:
-            pass
-
-    # Honest failure for multi-segment coordinates. Session-global times must
-    # not be applied to a single chunk file; until a stitched source is built,
-    # refuse rather than render the wrong content.
-    if clip.get("chunk_id"):
-        with db.get_db_connection() as conn:
-            chunk_row = conn.execute("SELECT duration FROM chunks WHERE id = ?", (clip["chunk_id"],)).fetchone()
-        chunk_duration = float(chunk_row["duration"] or 0.0) if chunk_row else 0.0
-        if chunk_duration > 0 and float(clip["end_time"]) > chunk_duration + 1.0:
+    def _prepare_approve():
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+        if clip.get("status") in ("approved", "published"):
+            return {"early": {"status": "success", "message": f"Clip {clip_id} is already approved", "idempotent": True}}
+        if clip.get("status") != "ready_review":
+            raise HTTPException(status_code=409, detail=f"Clip cannot be approved from status '{clip.get('status')}'")
+        _duration = float(clip.get("end_time") or 0) - float(clip.get("start_time") or 0)
+        if _duration < MIN_CLIP_DURATION:
             raise HTTPException(
                 status_code=409,
-                detail="This clip spans multiple recording segments. Approve it only after a stitched source is available; rendering a single chunk would use the wrong content.",
+                detail=f"Clip is {_duration:.1f}s — shorter than the {MIN_CLIP_DURATION:.0f}s minimum.",
             )
 
-    segments = None
-    if caption_snapshot:
-        groups = caption_snapshot.get("groups", [])
-        if groups:
-            segments = [{"id": g.get("id", index), "start": g.get("start", 0), "end": g.get("end", 0),
-                         "text": g.get("text", ""), "words": g.get("words", [])}
-                        for index, g in enumerate(groups)]
-    if not segments and clip.get("chunk_id"):
-        with db.get_db_connection() as conn:
-            t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
-            if t_row and t_row["segments_json"]:
-                try:
-                    segments = json.loads(t_row["segments_json"])
-                except Exception:
-                    segments = None
+        # Cloud caption reconciliation: the phone may have saved newer caption
+        # edits in Dispatch Cloud while this PC was offline. Pull them (monotonic
+        # revision guard, ownership-checked) BEFORE this render decides what
+        # caption data is authoritative, so an offline edit can never be silently
+        # skipped by the final render. Never fatal: on cloud errors the local
+        # state remains what it was.
+        try:
+            import_cloud_captions_for_clip(clip_id)
+            clip = db.get_clip_by_id(clip_id) or clip
+        except Exception as e:
+            logger.warning("Cloud caption reconciliation before approve failed for %s: %s", clip_id, e)
 
-    start_t = float(clip["start_time"])
-    end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
+        current_revision = int(clip.get("range_revision") or 0)
+        if payload.range_revision is not None and payload.range_revision != current_revision:
+            raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
+
+        ctx = get_clip_framing_context(clip)
+        raw_mode = payload.layout_mode or clip.get("layout_mode") or ctx["layout_mode"]
+        raw_mode = str(raw_mode).strip().lower()
+        if raw_mode not in ctx["valid_mode_ids"]:
+            raw_mode = ctx["layout_mode"]
+
+        target_layout = raw_mode
+        if payload.caption_track is not None:
+            try:
+                caption_track = CaptionTrack.from_dict(payload.caption_track)
+                if caption_track.clip_id and caption_track.clip_id != clip_id:
+                    raise ValueError("Caption track belongs to another clip")
+                caption_snapshot = caption_track.to_dict()
+                saved = db.save_clip_caption_data(
+                    clip_id, json.dumps(caption_snapshot, ensure_ascii=False),
+                    expected_range_revision=current_revision,
+                    source_range_start=float(clip["start_time"]),
+                    source_range_end=float(clip["end_time"]),
+                    timing_warning=payload.caption_track.get("timing_warning"),
+                )
+                if not saved:
+                    raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before approving.")
+                clip = db.get_clip_by_id(clip_id) or clip
+            except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(status_code=400, detail=f"Invalid caption track: {e}") from e
+        else:
+            try:
+                caption_snapshot = json.loads(clip["caption_data"]) if clip.get("caption_data") else None
+            except Exception:
+                caption_snapshot = None
+            if caption_snapshot and int(clip.get("caption_range_revision") or 0) != current_revision:
+                raise HTTPException(status_code=409, detail="Saved captions belong to an older clip range. Reload and save captions before approving.")
+
+        if clip.get("caption_timing_warning"):
+            raise HTTPException(status_code=422, detail=str(clip["caption_timing_warning"]))
+        if caption_snapshot:
+            unreliable = [
+                group for group in caption_snapshot.get("groups", [])
+                if (not group.get("type") or group.get("type") == "caption")
+                and (not group.get("has_word_timing", True) or group.get("timing_mode", "word") != "word")
+            ]
+            if unreliable:
+                raise HTTPException(
+                    status_code=422,
+                    detail="These captions do not have reliable word-level timings. Retry transcription or remove the inexact caption groups before publishing.",
+                )
+
+        source_path = resolve_clip_source_path(clip)
+        if not source_path or not source_path.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot approve this clip: original source video is unavailable for final rendering."
+            )
+
+        # Never treat the rendered output as the "original source". Re-rendering from
+        # a previously rendered clip would silently degrade quality and could pick
+        # the wrong coordinate domain.
+        if clip.get("video_path"):
+            try:
+                if Path(clip["video_path"]).resolve() == source_path.resolve():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cannot approve this clip: the original source recording is missing; only a rendered copy exists.",
+                    )
+            except OSError:
+                pass
+
+        # Honest failure for multi-segment coordinates. Session-global times must
+        # not be applied to a single chunk file; until a stitched source is built,
+        # refuse rather than render the wrong content.
+        if clip.get("chunk_id"):
+            with db.get_db_connection() as conn:
+                chunk_row = conn.execute("SELECT duration FROM chunks WHERE id = ?", (clip["chunk_id"],)).fetchone()
+            chunk_duration = float(chunk_row["duration"] or 0.0) if chunk_row else 0.0
+            if chunk_duration > 0 and float(clip["end_time"]) > chunk_duration + 1.0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This clip spans multiple recording segments. Approve it only after a stitched source is available; rendering a single chunk would use the wrong content.",
+                )
+
+        segments = None
+        if caption_snapshot:
+            groups = caption_snapshot.get("groups", [])
+            if groups:
+                segments = [{"id": g.get("id", index), "start": g.get("start", 0), "end": g.get("end", 0),
+                             "text": g.get("text", ""), "words": g.get("words", [])}
+                            for index, g in enumerate(groups)]
+        if not segments and clip.get("chunk_id"):
+            with db.get_db_connection() as conn:
+                t_row = conn.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (clip["chunk_id"],)).fetchone()
+                if t_row and t_row["segments_json"]:
+                    try:
+                        segments = json.loads(t_row["segments_json"])
+                    except Exception:
+                        segments = None
+
+        start_t = float(clip["start_time"])
+        end_t = min(float(clip["end_time"]), start_t + MAX_CLIP_DURATION)
+        return {
+            "early": None,
+            "current_revision": current_revision,
+            "ctx": ctx,
+            "target_layout": target_layout,
+            "caption_snapshot": caption_snapshot,
+            "source_path": source_path,
+            "segments": segments,
+            "start_t": start_t,
+            "end_t": end_t,
+        }
+
+    prep = await asyncio.to_thread(_prepare_approve)
+    if prep["early"] is not None:
+        return prep["early"]
+
+    current_revision = prep["current_revision"]
+    ctx = prep["ctx"]
+    target_layout = prep["target_layout"]
+    caption_snapshot = prep["caption_snapshot"]
+    source_path = prep["source_path"]
+    segments = prep["segments"]
+    start_t = prep["start_t"]
+    end_t = prep["end_t"]
+
     try:
-        render_res = await asyncio.to_thread(
-            render_clip,
-            source_video=source_path,
-            clip_id=clip_id,
-            start_time=start_t,
-            end_time=end_t,
-            aspect_ratio=ctx["source_aspect_ratio"],
-            layout_mode=target_layout,
-            segments=segments,
-            subtitle_options={"enabled": bool(caption_snapshot or segments), "caption_track": caption_snapshot, "preserve_timing": True},
-            expected_range_revision=current_revision,
+        render_res = await asyncio.wait_for(
+            asyncio.to_thread(
+                _bounded_render_clip,
+                source_video=source_path,
+                clip_id=clip_id,
+                start_time=start_t,
+                end_time=end_t,
+                aspect_ratio=ctx["source_aspect_ratio"],
+                layout_mode=target_layout,
+                segments=segments,
+                subtitle_options={"enabled": bool(caption_snapshot or segments), "caption_track": caption_snapshot, "preserve_timing": True},
+                expected_range_revision=current_revision,
+            ),
+            timeout=360.0,
         )
         out_file = Path(render_res["video_path"])
         if not out_file.is_file() or out_file.stat().st_size == 0:
             raise RuntimeError("Final render is missing or empty")
-        from dispatch.ingestion.validator import probe_video
-        is_valid, probe_data, validation_error = probe_video(out_file)
+        is_valid, probe_data, validation_error = await asyncio.wait_for(
+            asyncio.to_thread(_bounded_probe_video, out_file),
+            timeout=90.0,
+        )
         if not is_valid:
             raise RuntimeError(f"Final render failed playback validation: {validation_error or 'invalid media'}")
         actual_duration = float(probe_data.get("duration") or 0.0) if isinstance(probe_data, dict) else 0.0
@@ -1948,35 +2134,38 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
             detail=f"Couldn't create a valid final render: {str(e)}"
         ) from e
 
-    latest = db.get_clip_by_id(clip_id)
-    if not latest or int(latest.get("range_revision") or 0) != current_revision:
-        with db.get_db_connection() as conn:
-            conn.execute("UPDATE clips SET render_stale = 1 WHERE id = ?", (clip_id,))
-            conn.commit()
-        raise HTTPException(status_code=409, detail="The clip range changed while rendering. The render was marked stale; review and approve again.")
+    def _finalize_approve():
+        latest = db.get_clip_by_id(clip_id)
+        if not latest or int(latest.get("range_revision") or 0) != current_revision:
+            with db.get_db_connection() as conn:
+                conn.execute("UPDATE clips SET render_stale = 1 WHERE id = ?", (clip_id,))
+                conn.commit()
+            raise HTTPException(status_code=409, detail="The clip range changed while rendering. The render was marked stale; review and approve again.")
 
-    db.approve_clip(
-        clip_id=clip_id,
-        custom_title=payload.title,
-        custom_tags=payload.hashtags,
-        custom_mode=payload.publish_mode,
-        custom_platforms=payload.platforms,
-        custom_layout=target_layout,
-        custom_accounts=payload.account_ids
-    )
+        db.approve_clip(
+            clip_id=clip_id,
+            custom_title=payload.title,
+            custom_tags=payload.hashtags,
+            custom_mode=payload.publish_mode,
+            custom_platforms=payload.platforms,
+            custom_layout=target_layout,
+            custom_accounts=payload.account_ids
+        )
 
-    # Trigger immediate outbox pass so clip publishing starts immediately (unless disabled in tests)
-    if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+        # Trigger immediate outbox pass so clip publishing starts immediately (unless disabled in tests)
+        if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+            try:
+                from dispatch.publisher.outbox import trigger_outbox_pass
+                trigger_outbox_pass()
+            except Exception as e:
+                logger.warning("Could not trigger immediate outbox pass for clip %s: %s", clip_id, e)
+
         try:
-            from dispatch.publisher.outbox import trigger_outbox_pass
-            trigger_outbox_pass()
-        except Exception as e:
-            logger.warning("Could not trigger immediate outbox pass for clip %s: %s", clip_id, e)
+            db.record_clip_feedback(clip_id=clip_id, event_type="approve", user_id=caller_user_id)
+        except Exception as _fb_err:
+            logger.debug("record_clip_feedback approve failed (non-fatal): %s", _fb_err)
 
-    try:
-        db.record_clip_feedback(clip_id=clip_id, event_type="approve", user_id=caller_user_id)
-    except Exception as _fb_err:
-        logger.debug("record_clip_feedback approve failed (non-fatal): %s", _fb_err)
+    await asyncio.to_thread(_finalize_approve)
 
     return {"status": "success", "message": f"Clip {clip_id} approved and enqueued for publishing", "layout_mode": target_layout}
 
@@ -1985,35 +2174,47 @@ async def _approve_clip_with_render(clip_id: str, payload: ApproveRequest, calle
 @_serialize_clip_mutation
 async def handle_reject_clip(clip_id: str, payload: RejectRequest, request: Request):
     """Reject a clip and record owner-scoped negative preference data."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-    if clip.get("status") == "rejected":
-        return {"status": "success", "message": f"Clip {clip_id} already rejected"}
-    if clip.get("status") not in ("ready_review", "approved"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Clip cannot be rejected from status '{clip.get('status')}'",
-        )
-    if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
-        raise HTTPException(status_code=409, detail="Clip could not be rejected in its current state")
+    def _reject_local():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+        if clip.get("status") == "rejected":
+            return {"early": {"status": "success", "message": f"Clip {clip_id} already rejected"}, "caller_user_id": caller_user_id}
+        if clip.get("status") not in ("ready_review", "approved"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Clip cannot be rejected from status '{clip.get('status')}'",
+            )
+        if not db.reject_clip(clip_id=clip_id, reason=payload.reason or "User rejected"):
+            raise HTTPException(status_code=409, detail="Clip could not be rejected in its current state")
+        return {"early": None, "caller_user_id": caller_user_id}
+
+    local_res = await asyncio.to_thread(_reject_local)
+    if local_res["early"] is not None:
+        return local_res["early"]
+    caller_user_id = local_res["caller_user_id"]
+
     # The cloud row must follow the local one. Without this the phone keeps
     # listing the clip as ready_review whenever it falls back to Cloud Mode.
     from dispatch.cloud.sync import sync_clip_to_cloud
-    await asyncio.to_thread(sync_clip_to_cloud, clip_id, None, True)
+    await asyncio.wait_for(asyncio.to_thread(sync_clip_to_cloud, clip_id, None, True), timeout=15.0)
+    await asyncio.to_thread(lambda: _safe_record_reject_feedback(clip_id, caller_user_id))
+    return {"status": "success", "message": f"Clip {clip_id} rejected"}
+
+
+def _safe_record_reject_feedback(clip_id: str, caller_user_id: Optional[str]) -> None:
     try:
         db.record_clip_feedback(clip_id=clip_id, event_type="reject", user_id=caller_user_id)
     except Exception as _fb_err:
         logger.debug("record_clip_feedback reject failed (non-fatal): %s", _fb_err)
-    return {"status": "success", "message": f"Clip {clip_id} rejected"}
 
 
 @app.get("/api/analytics/feedback")
-async def get_feedback_analytics(request: Request):
+def get_feedback_analytics(request: Request):
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
     return db.get_clip_feedback_stats(user_id=caller_user_id)
@@ -2022,7 +2223,7 @@ async def get_feedback_analytics(request: Request):
 
 @app.post("/api/clips/{clip_id}/metadata")
 @_serialize_clip_mutation
-async def handle_update_clip_metadata(clip_id: str, payload: ClipMetadataRequest, request: Request):
+def handle_update_clip_metadata(clip_id: str, payload: ClipMetadataRequest, request: Request):
     """Persist InspectorPane metadata edits (title/hook/hashtags/platform targets).
 
     D8: wired to db.update_clip_metadata — enforced ready_review-only and
@@ -2072,26 +2273,29 @@ async def get_publisher_outbox(request: Request, status: Optional[str] = None):
     Owner-scoped: a non-system caller only sees its own jobs. The local owner
     (trusted loopback, no user header) retains full administrative visibility.
     """
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clauses: list[str] = []
-    params: list[Any] = []
-    if caller_user_id:
-        clauses.append("user_id = ?")
-        params.append(caller_user_id)
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT * FROM publishing_outbox{where} ORDER BY created_at DESC", tuple(params))
-        jobs = [dict(row) for row in cursor.fetchall()]
-    return {"jobs": jobs, "count": len(jobs)}
+    def _load_outbox():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clauses: list[str] = []
+        params: list[Any] = []
+        if caller_user_id:
+            clauses.append("user_id = ?")
+            params.append(caller_user_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM publishing_outbox{where} ORDER BY created_at DESC", tuple(params))
+            jobs = [dict(row) for row in cursor.fetchall()]
+        return {"jobs": jobs, "count": len(jobs)}
+
+    return await asyncio.to_thread(_load_outbox)
 
 
 @app.get("/api/publisher/reconcile")
-async def get_reconcile_jobs(request: Request):
+def get_reconcile_jobs(request: Request):
     """List outbox jobs that require manual or automated reconciliation before retry."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
@@ -2111,82 +2315,89 @@ async def get_reconcile_jobs(request: Request):
 @app.post("/api/publisher/reconcile/{job_id}/resolve")
 async def resolve_reconciliation_job(job_id: str, payload: ResolveReconciliationRequest, request: Request):
     """Manually resolve a reconciliation_required outbox job."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    action = payload.action.lower()
-    if action not in ("mark_published", "retry", "mark_failed"):
-        raise HTTPException(status_code=400, detail="Action must be one of: 'mark_published', 'retry', 'mark_failed'")
+    def _resolve():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        action = payload.action.lower()
+        if action not in ("mark_published", "retry", "mark_failed"):
+            raise HTTPException(status_code=400, detail="Action must be one of: 'mark_published', 'retry', 'mark_failed'")
 
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
-        job = cursor.fetchone()
-        if not job:
-            raise HTTPException(status_code=404, detail="Outbox job not found")
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
+            job = cursor.fetchone()
+            if not job:
+                raise HTTPException(status_code=404, detail="Outbox job not found")
 
-        job_dict = dict(job)
-        if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
-            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
-        if action == "mark_published":
-            remote_id = payload.remote_id or job_dict.get("remote_id") or "manual_resolution"
-            remote_url = payload.remote_url or job_dict.get("remote_url") or ""
-            cursor.execute("""
-                UPDATE publishing_outbox 
-                SET status = 'published',
-                    remote_id = ?,
-                    remote_url = ?,
-                    updated_at = CURRENT_TIMESTAMP,
-                    published_at = CURRENT_TIMESTAMP,
-                    last_error = ?
-                WHERE id = ?
-            """, (remote_id, remote_url, f"Resolved manually: {payload.note or 'Confirmed published'}", job_id))
-            # Commit before the aggregator opens its own connection; otherwise the
-            # second writer blocks on this transaction and the resolution rolls back.
-            conn.commit()
-            from dispatch.publisher.outbox import check_and_finalize_clip
-            vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
-            check_and_finalize_clip(job_dict["clip_id"], vpath)
-            return {"status": "success", "message": f"Job {job_id} marked as published", "action": action}
+            job_dict = dict(job)
+            if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
+                raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
+            if action == "mark_published":
+                remote_id = payload.remote_id or job_dict.get("remote_id") or "manual_resolution"
+                remote_url = payload.remote_url or job_dict.get("remote_url") or ""
+                cursor.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'published',
+                        remote_id = ?,
+                        remote_url = ?,
+                        updated_at = CURRENT_TIMESTAMP,
+                        published_at = CURRENT_TIMESTAMP,
+                        last_error = ?
+                    WHERE id = ?
+                """, (remote_id, remote_url, f"Resolved manually: {payload.note or 'Confirmed published'}", job_id))
+                # Commit before the aggregator opens its own connection; otherwise the
+                # second writer blocks on this transaction and the resolution rolls back.
+                conn.commit()
+                from dispatch.publisher.outbox import check_and_finalize_clip
+                vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
+                check_and_finalize_clip(job_dict["clip_id"], vpath)
+                return {"status": "success", "message": f"Job {job_id} marked as published", "action": action}
 
-        elif action == "retry":
-            cursor.execute("""
-                UPDATE publishing_outbox 
-                SET status = 'queued',
-                    updated_at = CURRENT_TIMESTAMP,
-                    next_retry_at = CURRENT_TIMESTAMP,
-                    last_error = ?
-                WHERE id = ?
-            """, (f"Reconciliation resolved: retry queued. Note: {payload.note or 'Manual retry'}", job_id))
-            if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
-                from dispatch.publisher.outbox import trigger_outbox_pass
-                trigger_outbox_pass()
-            return {"status": "success", "message": f"Job {job_id} requeued for publishing", "action": action}
+            elif action == "retry":
+                cursor.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'queued',
+                        updated_at = CURRENT_TIMESTAMP,
+                        next_retry_at = CURRENT_TIMESTAMP,
+                        last_error = ?
+                    WHERE id = ?
+                """, (f"Reconciliation resolved: retry queued. Note: {payload.note or 'Manual retry'}", job_id))
+                if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+                    from dispatch.publisher.outbox import trigger_outbox_pass
+                    trigger_outbox_pass()
+                return {"status": "success", "message": f"Job {job_id} requeued for publishing", "action": action}
 
-        elif action == "mark_failed":
-            cursor.execute("""
-                UPDATE publishing_outbox 
-                SET status = 'failed',
-                    updated_at = CURRENT_TIMESTAMP,
-                    last_error = ?
-                WHERE id = ?
-            """, (f"Reconciliation resolved as failed: {payload.note or 'User marked failed'}", job_id))
-            return {"status": "success", "message": f"Job {job_id} marked as failed", "action": action}
+            elif action == "mark_failed":
+                cursor.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'failed',
+                        updated_at = CURRENT_TIMESTAMP,
+                        last_error = ?
+                    WHERE id = ?
+                """, (f"Reconciliation resolved as failed: {payload.note or 'User marked failed'}", job_id))
+                return {"status": "success", "message": f"Job {job_id} marked as failed", "action": action}
+
+    return await asyncio.to_thread(_resolve)
 
 
 @app.post("/api/publisher/reconcile/{job_id}/auto-reconcile")
 async def auto_reconcile_job(job_id: str, request: Request):
     """Automatically reconcile an outbox job against platform API."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
-        job = cursor.fetchone()
-        if not job:
-            raise HTTPException(status_code=404, detail="Outbox job not found")
-        job_dict = dict(job)
-    if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
+    def _load_job():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM publishing_outbox WHERE id = ?", (job_id,))
+            job = cursor.fetchone()
+            if not job:
+                raise HTTPException(status_code=404, detail="Outbox job not found")
+            job_dict = dict(job)
+        if caller_user_id and (job_dict.get("user_id") or "") != caller_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this job")
+        return job_dict
+
+    job_dict = await asyncio.to_thread(_load_job)
 
     platform = job_dict.get("platform", "").lower()
     if platform not in ("youtube", "youtube_shorts"):
@@ -2197,7 +2408,10 @@ async def auto_reconcile_job(job_id: str, request: Request):
         }
 
     from dispatch.publisher.outbox import reconcile_youtube_job, check_and_finalize_clip
-    result = reconcile_youtube_job(job_dict)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(reconcile_youtube_job, job_dict), timeout=30.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timed out reconciling job with YouTube")
 
     if not result.get("reconciled"):
         return {
@@ -2206,52 +2420,55 @@ async def auto_reconcile_job(job_id: str, request: Request):
             "reconciled": False
         }
 
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        if result.get("published"):
-            vid = result["remote_id"]
-            vurl = result.get("remote_url", f"https://www.youtube.com/watch?v={vid}")
-            cursor.execute("""
-                UPDATE publishing_outbox 
-                SET status = 'published',
-                    remote_id = ?,
-                    remote_url = ?,
-                    updated_at = CURRENT_TIMESTAMP,
-                    published_at = CURRENT_TIMESTAMP,
-                    last_error = 'Auto-reconciled: found confirmed upload on YouTube'
-                WHERE id = ?
-            """, (vid, vurl, job_id))
-            # Commit the job transition before the clip aggregator reads from a
-            # second connection (avoids the SQLite write-lock deadlock).
-            conn.commit()
-            vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
-            check_and_finalize_clip(job_dict["clip_id"], vpath)
-            return {
-                "status": "success",
-                "message": f"Upload verified on YouTube (Video ID: {vid}). Marked published.",
-                "reconciled": True,
-                "published": True,
-                "remote_id": vid,
-                "remote_url": vurl
-            }
-        else:
-            cursor.execute("""
-                UPDATE publishing_outbox 
-                SET status = 'queued',
-                    next_retry_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP,
-                    last_error = 'Auto-reconciled: confirmed absent on YouTube; safe to retry'
-                WHERE id = ?
-            """, (job_id,))
-            if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
-                from dispatch.publisher.outbox import trigger_outbox_pass
-                trigger_outbox_pass()
-            return {
-                "status": "success",
-                "message": "Video confirmed absent on YouTube. Requeued for safe publishing retry.",
-                "reconciled": True,
-                "published": False
-            }
+    def _apply_reconcile():
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            if result.get("published"):
+                vid = result["remote_id"]
+                vurl = result.get("remote_url", f"https://www.youtube.com/watch?v={vid}")
+                cursor.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'published',
+                        remote_id = ?,
+                        remote_url = ?,
+                        updated_at = CURRENT_TIMESTAMP,
+                        published_at = CURRENT_TIMESTAMP,
+                        last_error = 'Auto-reconciled: found confirmed upload on YouTube'
+                    WHERE id = ?
+                """, (vid, vurl, job_id))
+                # Commit the job transition before the clip aggregator reads from a
+                # second connection (avoids the SQLite write-lock deadlock).
+                conn.commit()
+                vpath = Path(job_dict["video_path"]) if job_dict.get("video_path") else None
+                check_and_finalize_clip(job_dict["clip_id"], vpath)
+                return {
+                    "status": "success",
+                    "message": f"Upload verified on YouTube (Video ID: {vid}). Marked published.",
+                    "reconciled": True,
+                    "published": True,
+                    "remote_id": vid,
+                    "remote_url": vurl
+                }
+            else:
+                cursor.execute("""
+                    UPDATE publishing_outbox 
+                    SET status = 'queued',
+                        next_retry_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP,
+                        last_error = 'Auto-reconciled: confirmed absent on YouTube; safe to retry'
+                    WHERE id = ?
+                """, (job_id,))
+                if not os.getenv("DISPATCH_DISABLE_AUTO_OUTBOX"):
+                    from dispatch.publisher.outbox import trigger_outbox_pass
+                    trigger_outbox_pass()
+                return {
+                    "status": "success",
+                    "message": "Video confirmed absent on YouTube. Requeued for safe publishing retry.",
+                    "reconciled": True,
+                    "published": False
+                }
+
+    return await asyncio.to_thread(_apply_reconcile)
 
 
 _filmstrip_locks: Dict[str, asyncio.Lock] = {}
@@ -2277,21 +2494,32 @@ async def get_clip_filmstrip(clip_id: str, request: Request):
     start_time + slot); generation is atomic; any drift between the video
     and the cached artifact regenerates the whole strip.
     """
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+    def _load_clip():
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+        return clip
+
+    clip = await asyncio.to_thread(_load_clip)
+
+    def _load_bounded_filmstrip():
+        with _acquire_ffmpeg_slot(timeout_seconds=30.0):
+            return load_filmstrip_payload(clip, clip_id)
 
     lock = await get_filmstrip_lock(clip_id)
     async with lock:
-        payload = await asyncio.to_thread(load_filmstrip_payload, clip, clip_id)
+        try:
+            payload = await asyncio.wait_for(asyncio.to_thread(_load_bounded_filmstrip), timeout=90.0)
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(status_code=504, detail="Filmstrip generation timed out")
     return payload
 
 
 @app.api_route("/clips/filmstrip_cache/{clip_id}/{filename}", methods=["GET", "HEAD"])
-async def get_filmstrip_frame(clip_id: str, filename: str, request: Request):
+def get_filmstrip_frame(clip_id: str, filename: str, request: Request):
     """Stream one filmstrip frame with the same safety/caching semantics as
     get_clip_file: traversal-locked to the clip's cache directory, ownership
     checked, ETag/304 conditional GET, immutable when the URL is versioned."""
@@ -2355,7 +2583,7 @@ async def get_caption_presets():
 
 
 @app.get("/api/clips/{clip_id}/captions")
-async def get_clip_captions(clip_id: str, request: Request):
+def get_clip_captions(clip_id: str, request: Request):
     """Return saved captions or derive a lightweight preview from the stored transcript."""
     caller_user_id = resolve_caller_user_id(request)
     clip = db.get_clip_by_id(clip_id)
@@ -2556,74 +2784,81 @@ async def get_clip_captions(clip_id: str, request: Request):
 @_serialize_clip_mutation
 async def save_clip_captions(clip_id: str, request: Request):
     """Save customized CaptionTrack JSON and export updated ASS file for FFmpeg render parity."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request)
-    clip = db.get_clip_by_id(clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
-    if clip.get("status") != "ready_review":
-        raise HTTPException(status_code=409, detail="Only reviewable clips can change captions")
+    def _authorize():
+        verify_dashboard_auth(request)
+        caller_user_id = resolve_caller_user_id(request)
+        clip = db.get_clip_by_id(clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if caller_user_id and (not clip.get("user_id") or clip["user_id"] != caller_user_id):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this clip")
+        if clip.get("status") != "ready_review":
+            raise HTTPException(status_code=409, detail="Only reviewable clips can change captions")
+        return clip
 
+    clip = await asyncio.to_thread(_authorize)
     data = await request.json()
-    track = CaptionTrack.from_dict(data)
-    if track.clip_id and track.clip_id != clip_id:
-        raise HTTPException(status_code=409, detail="Caption track belongs to another clip")
-    expected_revision = data.get("range_revision", int(clip.get("range_revision") or 0))
-    if expected_revision != int(clip.get("range_revision") or 0):
-        raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
-    current_captions_revision = int(clip.get("captions_revision") or 0)
-    expected_captions_revision: Optional[int] = None
-    if data.get("base_revision") is not None:
-        try:
-            expected_captions_revision = int(data.get("base_revision"))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="base_revision must be an integer")
-        if expected_captions_revision != current_captions_revision:
+
+    def _save_and_export():
+        track = CaptionTrack.from_dict(data)
+        if track.clip_id and track.clip_id != clip_id:
+            raise HTTPException(status_code=409, detail="Caption track belongs to another clip")
+        expected_revision = data.get("range_revision", int(clip.get("range_revision") or 0))
+        if expected_revision != int(clip.get("range_revision") or 0):
+            raise HTTPException(status_code=409, detail="The selected range changed. Reload captions before saving.")
+        current_captions_revision = int(clip.get("captions_revision") or 0)
+        expected_captions_revision: Optional[int] = None
+        if data.get("base_revision") is not None:
+            try:
+                expected_captions_revision = int(data.get("base_revision"))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="base_revision must be an integer")
+            if expected_captions_revision != current_captions_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Captions changed on another device. Reload the clip before saving.",
+                )
+        track_dict = track.to_dict()
+        timing_warning = data.get("timing_warning")
+        if any(not group.has_word_timing or group.timing_mode != "word" for group in track.groups if group.type in ("caption", "")):
+            timing_warning = "Some transcript captions have phrase-level timing only. Retry transcription before publishing."
+        if not db.save_clip_caption_data(
+            clip_id, json.dumps(track_dict), expected_range_revision=expected_revision,
+            source_range_start=float(clip["start_time"]), source_range_end=float(clip["end_time"]),
+            timing_warning=timing_warning,
+            expected_captions_revision=expected_captions_revision,
+        ):
             raise HTTPException(
                 status_code=409,
-                detail="Captions changed on another device. Reload the clip before saving.",
+                detail="Captions or the selected range changed while editing. Reload the clip before saving.",
             )
-    track_dict = track.to_dict()
-    timing_warning = data.get("timing_warning")
-    if any(not group.has_word_timing or group.timing_mode != "word" for group in track.groups if group.type in ("caption", "")):
-        timing_warning = "Some transcript captions have phrase-level timing only. Retry transcription before publishing."
-    if not db.save_clip_caption_data(
-        clip_id, json.dumps(track_dict), expected_range_revision=expected_revision,
-        source_range_start=float(clip["start_time"]), source_range_end=float(clip["end_time"]),
-        timing_warning=timing_warning,
-        expected_captions_revision=expected_captions_revision,
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Captions or the selected range changed while editing. Reload the clip before saving.",
-        )
 
-    # Export ASS file with exact parity (remap to presentation time if multi-segment EDL)
-    ass_path = PROCESSING_DIR / f"{clip_id}.ass"
-    export_track = track
-    if clip.get("project_document"):
-        try:
-            raw_doc = clip["project_document"]
-            p_doc = json.loads(raw_doc) if isinstance(raw_doc, str) else raw_doc
-            doc_segs = p_doc.get("timeline", {}).get("segments", []) if isinstance(p_doc, dict) else []
-            if doc_segs:
-                from dispatch.segments import canonical_media_spans
-                timeline_spans = canonical_media_spans(doc_segs)
-                if timeline_spans and len(timeline_spans) > 1:
-                    from dispatch.captions.exporter import remap_caption_track_to_timeline
-                    export_track = remap_caption_track_to_timeline(track, timeline_spans, clip_start=float(clip["start_time"]))
-        except Exception:
-            export_track = track
-    export_to_ass(export_track, ass_path)
+        # Export ASS file with exact parity (remap to presentation time if multi-segment EDL)
+        ass_path = PROCESSING_DIR / f"{clip_id}.ass"
+        export_track = track
+        if clip.get("project_document"):
+            try:
+                raw_doc = clip["project_document"]
+                p_doc = json.loads(raw_doc) if isinstance(raw_doc, str) else raw_doc
+                doc_segs = p_doc.get("timeline", {}).get("segments", []) if isinstance(p_doc, dict) else []
+                if doc_segs:
+                    from dispatch.segments import canonical_media_spans
+                    timeline_spans = canonical_media_spans(doc_segs)
+                    if timeline_spans and len(timeline_spans) > 1:
+                        from dispatch.captions.exporter import remap_caption_track_to_timeline
+                        export_track = remap_caption_track_to_timeline(track, timeline_spans, clip_start=float(clip["start_time"]))
+            except Exception:
+                export_track = track
+        export_to_ass(export_track, ass_path)
 
-    return {
-        "status": "success",
-        "message": "Captions saved and exported to ASS",
-        "range_revision": expected_revision,
-        "captions_revision": current_captions_revision + 1,
-    }
+        return {
+            "status": "success",
+            "message": "Captions saved and exported to ASS",
+            "range_revision": expected_revision,
+            "captions_revision": current_captions_revision + 1,
+        }
+
+    return await asyncio.to_thread(_save_and_export)
 
 
 @app.post("/api/media/upload")
@@ -2631,8 +2866,7 @@ async def upload_editor_media(request: Request, file: UploadFile = File(...)):
     """Accept user-imported overlay, audio track, or voiceover recording.
     Validates file type and size, writes durably to CLIPS_DIR, and returns a permanent URL.
     """
-    verify_dashboard_auth(request)
-    import uuid
+    await asyncio.to_thread(verify_dashboard_auth, request)
 
     filename = file.filename or "media_upload"
     ext = Path(filename).suffix.lower()
@@ -2657,20 +2891,21 @@ async def upload_editor_media(request: Request, file: UploadFile = File(...)):
     MAX_MEDIA_BYTES = 100 * 1024 * 1024  # 100MB
 
     total_bytes = 0
+    f = await asyncio.to_thread(open, dest_path, "wb")
     try:
-        with open(dest_path, "wb") as f:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                total_bytes += len(chunk)
-                if total_bytes > MAX_MEDIA_BYTES:
-                    dest_path.unlink(missing_ok=True)
-                    raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 100MB")
-                f.write(chunk)
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > MAX_MEDIA_BYTES:
+                raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 100MB")
+            await asyncio.to_thread(f.write, chunk)
     except Exception:
-        dest_path.unlink(missing_ok=True)
+        await asyncio.to_thread(f.close)
+        await asyncio.to_thread(dest_path.unlink, missing_ok=True)
         raise
+    await asyncio.to_thread(f.close)
 
     logger.info("Editor media uploaded durably: %s (%d bytes)", safe_name, total_bytes)
     return {
@@ -2685,8 +2920,7 @@ async def upload_editor_media(request: Request, file: UploadFile = File(...)):
 @app.post("/api/recordings/upload")
 async def upload_web_recording(request: Request, file: UploadFile = File(...)):
     """Accept test recording from browser camera, save to storage, register session and chunk, extract clip, and prepare for review."""
-    verify_dashboard_auth(request)
-    import subprocess
+    await asyncio.to_thread(verify_dashboard_auth, request)
     import shutil
     from dispatch.ingestion.validator import inspect_video_orientation, calculate_file_hash
 
@@ -2699,106 +2933,126 @@ async def upload_web_recording(request: Request, file: UploadFile = File(...)):
     MAX_RECORDING_UPLOAD_BYTES = 500 * 1024 * 1024
     temp_webm = PROCESSING_DIR / f"{chunk_id}.webm"
     total_bytes = 0
+    f = await asyncio.to_thread(open, temp_webm, "wb")
     try:
-        with open(temp_webm, "wb") as f:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                total_bytes += len(chunk)
-                if total_bytes > MAX_RECORDING_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 500MB")
-                f.write(chunk)
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > MAX_RECORDING_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload file exceeds maximum limit of 500MB")
+            await asyncio.to_thread(f.write, chunk)
     except Exception:
-        temp_webm.unlink(missing_ok=True)
+        await asyncio.to_thread(f.close)
+        await asyncio.to_thread(temp_webm.unlink, missing_ok=True)
         raise
+    await asyncio.to_thread(f.close)
 
-    # 2. Standardize raw source chunk to MP4 in PROCESSING_DIR
-    chunk_path = PROCESSING_DIR / f"{chunk_id}.mp4"
-    cmd = [
-        "ffmpeg", "-y", "-i", str(temp_webm),
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(chunk_path)
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if temp_webm.exists():
-        temp_webm.unlink(missing_ok=True)
+    def _finalize_web_recording():
+        # 2. Standardize raw source chunk to MP4 in PROCESSING_DIR
+        chunk_path = PROCESSING_DIR / f"{chunk_id}.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-i", str(temp_webm),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(chunk_path)
+        ]
+        try:
+            with _acquire_ffmpeg_slot(timeout_seconds=60.0):
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=300,
+                    **low_priority_subprocess_kwargs(),
+                )
+        finally:
+            if temp_webm.exists():
+                temp_webm.unlink(missing_ok=True)
 
-    if not chunk_path.exists() or chunk_path.stat().st_size == 0:
-        raise HTTPException(status_code=500, detail="Failed to transcode uploaded recording.")
+        if not chunk_path.exists() or chunk_path.stat().st_size == 0:
+            raise HTTPException(status_code=500, detail="Failed to transcode uploaded recording.")
 
-    # 3. Inspect video orientation, dimensions, and duration
-    info = inspect_video_orientation(chunk_path)
-    width = info.get("effective_width") or info.get("width") or 1080
-    height = info.get("effective_height") or info.get("height") or 1920
-    orientation = info.get("orientation", "portrait")
-    aspect_ratio = "9:16" if orientation == "portrait" else "16:9"
-    duration = max(1.0, float(info.get("duration") or 30.0))
-    file_hash = calculate_file_hash(chunk_path)
+        # 3. Inspect video orientation, dimensions, and duration
+        with _acquire_ffmpeg_slot(timeout_seconds=35.0):
+            info = inspect_video_orientation(chunk_path)
+        width = info.get("effective_width") or info.get("width") or 1080
+        height = info.get("effective_height") or info.get("height") or 1920
+        orientation = info.get("orientation", "portrait")
+        aspect_ratio = "9:16" if orientation == "portrait" else "16:9"
+        duration = max(1.0, float(info.get("duration") or 30.0))
+        file_hash = calculate_file_hash(chunk_path)
 
-    # 4. Prepare initial clip in CLIPS_DIR
-    clip_video_path = CLIPS_DIR / f"{clip_id}.mp4"
-    shutil.copy2(chunk_path, clip_video_path)
+        # 4. Prepare initial clip in CLIPS_DIR
+        clip_video_path = CLIPS_DIR / f"{clip_id}.mp4"
+        shutil.copy2(chunk_path, clip_video_path)
 
-    # Generate thumbnail
-    thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
-    thumb_time = min(1.0, duration / 2.0)
-    subprocess.run([
-        "ffmpeg", "-y", "-ss", str(round(thumb_time, 3)), "-i", str(clip_video_path),
-        "-vframes", "1", "-q:v", "2", str(thumb_path)
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-
-    # Initial layout mode: portrait -> native_916, landscape -> crop_916
-    initial_layout = "native_916" if orientation == "portrait" else "crop_916"
-
-    # 5. Insert into sessions, chunks, and clips tables atomically
-    with db.get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO sessions (id, status) VALUES (?, 'completed')", (session_id,))
-        cursor.execute("""
-            INSERT OR REPLACE INTO chunks (
-                id, session_id, filename, filepath, file_hash, duration,
-                width, height, aspect_ratio, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processed')
-        """, (chunk_id, session_id, chunk_path.name, str(chunk_path), file_hash, duration, width, height, aspect_ratio))
-        cursor.execute("""
-            INSERT OR REPLACE INTO clips (
-                id, session_id, chunk_id, start_time, end_time, duration,
-                title, hook, description, hashtags, virality_score,
-                layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
-                video_path, thumbnail_path
-            ) VALUES (
-                ?, ?, ?, 0.0, ?, ?,
-                'Web Studio Recording', 'Consistency beats motivation every single day',
-                'Recorded directly from Dispatch Web Studio. #Shorts #Dispatch',
-                '#Shorts #Dispatch #Creator', 92,
-                ?, ?, 'ready_review', 'public', 'youtube,instagram',
-                ?, ?
+        # Generate thumbnail
+        thumb_path = CLIPS_DIR / f"{clip_id}.jpg"
+        thumb_time = min(1.0, duration / 2.0)
+        with _acquire_ffmpeg_slot(timeout_seconds=30.0):
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-ss", str(round(thumb_time, 3)), "-i", str(clip_video_path),
+                    "-vframes", "1", "-q:v", "2", str(thumb_path)
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                **low_priority_subprocess_kwargs(),
             )
-        """, (
-            clip_id, session_id, chunk_id, duration, duration,
-            initial_layout, initial_layout,
-            str(clip_video_path), str(thumb_path) if thumb_path.exists() else None
-        ))
-        conn.commit()
 
-    return {
-        "status": "success",
-        "clip_id": clip_id,
-        "session_id": session_id,
-        "chunk_id": chunk_id,
-        "video_url": f"/clips/{clip_video_path.name}",
-        "duration": duration,
-        "message": "Recording uploaded and ready for review!"
-    }
+        # Initial layout mode: portrait -> native_916, landscape -> crop_916
+        initial_layout = "native_916" if orientation == "portrait" else "crop_916"
+
+        # 5. Insert into sessions, chunks, and clips tables atomically
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO sessions (id, status) VALUES (?, 'completed')", (session_id,))
+            cursor.execute("""
+                INSERT OR REPLACE INTO chunks (
+                    id, session_id, filename, filepath, file_hash, duration,
+                    width, height, aspect_ratio, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processed')
+            """, (chunk_id, session_id, chunk_path.name, str(chunk_path), file_hash, duration, width, height, aspect_ratio))
+            cursor.execute("""
+                INSERT OR REPLACE INTO clips (
+                    id, session_id, chunk_id, start_time, end_time, duration,
+                    title, hook, description, hashtags, virality_score,
+                    layout_mode, rendered_layout_mode, status, publish_mode, platform_targets,
+                    video_path, thumbnail_path
+                ) VALUES (
+                    ?, ?, ?, 0.0, ?, ?,
+                    'Web Studio Recording', 'Consistency beats motivation every single day',
+                    'Recorded directly from Dispatch Web Studio. #Shorts #Dispatch',
+                    '#Shorts #Dispatch #Creator', 92,
+                    ?, ?, 'ready_review', 'public', 'youtube,instagram',
+                    ?, ?
+                )
+            """, (
+                clip_id, session_id, chunk_id, duration, duration,
+                initial_layout, initial_layout,
+                str(clip_video_path), str(thumb_path) if thumb_path.exists() else None
+            ))
+            conn.commit()
+
+        return {
+            "status": "success",
+            "clip_id": clip_id,
+            "session_id": session_id,
+            "chunk_id": chunk_id,
+            "video_url": f"/clips/{clip_video_path.name}",
+            "duration": duration,
+            "message": "Recording uploaded and ready for review!"
+        }
+
+    return await asyncio.wait_for(asyncio.to_thread(_finalize_web_recording), timeout=360.0)
 
 
 @app.get("/api/recordings")
-async def get_recordings(request: Request):
+def get_recordings(request: Request):
     """Return list of recordings/chunks formatted for the Sessions tab.
     Scoped strictly to the authenticated user.
     """
@@ -3012,7 +3266,7 @@ async def get_recordings(request: Request):
 
 
 @app.get("/api/settings")
-async def get_settings():
+def get_settings():
     return {
         "publish_mode": db.get_setting("publish_mode", DEFAULT_PUBLISH_MODE),
         "auto_process": db.get_setting("auto_process", "true")
@@ -3020,7 +3274,7 @@ async def get_settings():
 
 
 @app.post("/api/settings")
-async def update_settings(payload: SettingsRequest, request: Request):
+def update_settings(payload: SettingsRequest, request: Request):
     verify_dashboard_auth(request)
     if payload.publish_mode:
         db.set_setting("publish_mode", payload.publish_mode)
@@ -3030,13 +3284,13 @@ async def update_settings(payload: SettingsRequest, request: Request):
 
 
 @app.get("/api/youtube/inbox")
-async def get_youtube_inbox_items(request: Request):
+def get_youtube_inbox_items(request: Request):
     """List YouTube Inbox items and their current processing status."""
     caller_user_id = resolve_caller_user_id(request)
     return {"items": db.list_youtube_inbox(limit=30, user_id=caller_user_id)}
 
 @app.delete("/api/youtube/inbox/{video_id}")
-async def delete_youtube_inbox_entry(video_id: str, request: Request):
+def delete_youtube_inbox_entry(video_id: str, request: Request):
     """Delete a session or YouTube video from the local inbox."""
     verify_dashboard_auth(request)
     caller_user_id = resolve_caller_user_id(request)
@@ -3065,7 +3319,7 @@ async def delete_youtube_inbox_entry(video_id: str, request: Request):
 
 
 @app.post("/api/youtube/ingest")
-async def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
+def ingest_youtube_video(payload: YouTubeIngestRequest, request: Request):
     """Trigger on-demand download, transcription, and clip rendering from a YouTube video URL/ID."""
     verify_dashboard_auth(request)
     video_id = extract_youtube_video_id(payload.url)
@@ -3125,11 +3379,41 @@ class PairingCredentialsRequest(BaseModel):
     pairing_code: Optional[str] = None
 
 
-@app.get("/api/integrations/status")
-async def get_integrations_status():
-    """Return live status of YouTube OAuth and Gemini AI integrations."""
-    from dispatch.youtube_inbox.oauth import get_youtube_service
+_INTEGRATIONS_STATUS_CACHE_TTL_SECONDS = 60.0
+_INTEGRATIONS_STATUS_FETCH_TIMEOUT_SECONDS = 8.0
+_INTEGRATIONS_STATUS_LOCK = threading.Lock()
+_INTEGRATIONS_STATUS_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
+_INTEGRATIONS_STATUS_INFLIGHT: Optional[concurrent.futures.Future] = None
+_INTEGRATIONS_STATUS_GEN = 0
+
+
+def _clear_integrations_status_cache() -> None:
+    """Invalidate cached /api/integrations/status state (used on auth/key mutations & tests)."""
+    global _INTEGRATIONS_STATUS_CACHE, _INTEGRATIONS_STATUS_INFLIGHT, _INTEGRATIONS_STATUS_GEN
+    with _INTEGRATIONS_STATUS_LOCK:
+        _INTEGRATIONS_STATUS_GEN += 1
+        _INTEGRATIONS_STATUS_CACHE = None
+        _INTEGRATIONS_STATUS_INFLIGHT = None
+
+
+def _local_integrations_snapshot() -> Dict[str, Any]:
     from dispatch.config import GEMINI_API_KEY
+    client_secrets_exist = (ROOT_DIR / "client_secrets.json").exists()
+    token_exists = (ROOT_DIR / "youtube_token.json").exists()
+    gemini_key = GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
+    gemini_configured = bool(
+        gemini_key and len(gemini_key) > 15 and (gemini_key.startswith("AIzaSy") or gemini_key.startswith("AQ."))
+    )
+    return {
+        "client_secrets_exist": client_secrets_exist,
+        "token_exists": token_exists,
+        "gemini_key": gemini_key,
+        "gemini_configured": gemini_configured,
+    }
+
+
+def _compute_integrations_status_sync() -> Dict[str, Any]:
+    from dispatch.youtube_inbox.oauth import get_youtube_service, verify_channel_alignment
 
     yt_service = get_youtube_service()
     yt_connected = False
@@ -3150,33 +3434,122 @@ async def get_integrations_status():
             logger.warning("YouTube account verification failed (%s).", type(e).__name__)
             youtube_error = "YouTube could not be verified from this PC. Check its internet/DNS connection and retry."
 
-    client_secrets_exist = (ROOT_DIR / "client_secrets.json").exists()
-    token_exists = (ROOT_DIR / "youtube_token.json").exists()
-
-    gemini_key = GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
-    gemini_configured = bool(gemini_key and len(gemini_key) > 15 and (gemini_key.startswith("AIzaSy") or gemini_key.startswith("AQ.")))
-
-    from dispatch.youtube_inbox.oauth import verify_channel_alignment
+    local = _local_integrations_snapshot()
     alignment = verify_channel_alignment(yt_service)
     return {
         "youtube": {
             "connected": yt_connected,
             "channel_title": channel_title,
             "channel_id": channel_id,
-            "has_client_secrets": client_secrets_exist,
-            "has_token": token_exists,
+            "has_client_secrets": local["client_secrets_exist"],
+            "has_token": local["token_exists"],
             "error": youtube_error,
             "channel_alignment": alignment,
         },
         "gemini": {
-            "configured": gemini_configured,
-            "masked_key": f"{gemini_key[:8]}...{gemini_key[-4:]}" if len(gemini_key) > 12 else ""
-        }
+            "configured": local["gemini_configured"],
+            "masked_key": f"{local['gemini_key'][:8]}...{local['gemini_key'][-4:]}" if len(local["gemini_key"]) > 12 else "",
+        },
     }
 
 
+@app.get("/api/integrations/status")
+async def get_integrations_status():
+    """Return live status of YouTube OAuth and Gemini AI integrations (60s TTL single-flight)."""
+    global _INTEGRATIONS_STATUS_CACHE, _INTEGRATIONS_STATUS_INFLIGHT
+    now = time.monotonic()
+    stale_payload: Optional[Dict[str, Any]] = None
+    inflight: Optional[concurrent.futures.Future] = None
+    should_launch = False
+    launch_gen = 0
+
+    with _INTEGRATIONS_STATUS_LOCK:
+        if _INTEGRATIONS_STATUS_CACHE is not None:
+            expires_at, cached_payload = _INTEGRATIONS_STATUS_CACHE
+            if now < expires_at:
+                return dict(cached_payload)
+            stale_payload = dict(cached_payload)
+
+        if _INTEGRATIONS_STATUS_INFLIGHT is not None and not _INTEGRATIONS_STATUS_INFLIGHT.done():
+            inflight = _INTEGRATIONS_STATUS_INFLIGHT
+        else:
+            inflight = concurrent.futures.Future()
+            _INTEGRATIONS_STATUS_INFLIGHT = inflight
+            launch_gen = _INTEGRATIONS_STATUS_GEN
+            should_launch = True
+
+    if should_launch:
+        def _worker(fut: concurrent.futures.Future, expected_gen: int) -> None:
+            global _INTEGRATIONS_STATUS_CACHE, _INTEGRATIONS_STATUS_INFLIGHT
+            try:
+                result = _compute_integrations_status_sync()
+            except Exception as exc:
+                with _INTEGRATIONS_STATUS_LOCK:
+                    if _INTEGRATIONS_STATUS_INFLIGHT is fut:
+                        _INTEGRATIONS_STATUS_INFLIGHT = None
+                if not fut.done():
+                    fut.set_exception(exc)
+                return
+
+            with _INTEGRATIONS_STATUS_LOCK:
+                if expected_gen == _INTEGRATIONS_STATUS_GEN:
+                    _INTEGRATIONS_STATUS_CACHE = (
+                        time.monotonic() + _INTEGRATIONS_STATUS_CACHE_TTL_SECONDS,
+                        result,
+                    )
+                if _INTEGRATIONS_STATUS_INFLIGHT is fut:
+                    _INTEGRATIONS_STATUS_INFLIGHT = None
+            if not fut.done():
+                fut.set_result(result)
+
+        threading.Thread(
+            target=_worker,
+            args=(inflight, launch_gen),
+            name="dispatch-integrations-status",
+            daemon=True,
+        ).start()
+
+    loop = asyncio.get_running_loop()
+    wrapped = asyncio.wrap_future(inflight, loop=loop)
+    wrapped.add_done_callback(lambda f: f.exception() if f.done() and not f.cancelled() else None)
+    try:
+        payload = await asyncio.wait_for(
+            asyncio.shield(wrapped),
+            timeout=_INTEGRATIONS_STATUS_FETCH_TIMEOUT_SECONDS,
+        )
+        return dict(payload)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Timed out waiting %.1fs for /api/integrations/status; returning %s fallback.",
+            _INTEGRATIONS_STATUS_FETCH_TIMEOUT_SECONDS,
+            "stale cached" if stale_payload is not None else "local-only",
+        )
+        if stale_payload is not None:
+            return stale_payload
+        local = await asyncio.to_thread(_local_integrations_snapshot)
+        return {
+            "youtube": {
+                "connected": False,
+                "channel_title": "",
+                "channel_id": "",
+                "has_client_secrets": local["client_secrets_exist"],
+                "has_token": local["token_exists"],
+                "error": "YouTube status check timed out. Retrying in background.",
+                "channel_alignment": {
+                    "matched": False,
+                    "status": "timeout",
+                    "error": "Timed out verifying YouTube channel alignment.",
+                },
+            },
+            "gemini": {
+                "configured": local["gemini_configured"],
+                "masked_key": f"{local['gemini_key'][:8]}...{local['gemini_key'][-4:]}" if len(local["gemini_key"]) > 12 else "",
+            },
+        }
+
+
 @app.post("/api/integrations/gemini")
-async def update_gemini_key(payload: GeminiKeyRequest, request: Request):
+def update_gemini_key(payload: GeminiKeyRequest, request: Request):
     """Save and activate a Gemini API key directly from the dashboard."""
     verify_dashboard_auth(request)
     new_key = payload.api_key.strip()
@@ -3205,12 +3578,13 @@ async def update_gemini_key(payload: GeminiKeyRequest, request: Request):
     dispatch.config.GEMINI_API_KEY = new_key
     import dispatch.ai_clips.highlight_finder
     dispatch.ai_clips.highlight_finder.GEMINI_API_KEY = new_key
+    _clear_integrations_status_cache()
 
     return {"status": "success", "message": "Gemini API key saved and activated"}
 
 
 @app.post("/api/integrations/youtube/start-auth")
-async def start_youtube_auth(request: Request):
+def start_youtube_auth(request: Request):
     """Start one desktop OAuth flow using this Dispatch runtime's Python interpreter."""
     verify_dashboard_auth(request)
     global _YOUTUBE_AUTH_PROCESS
@@ -3255,19 +3629,20 @@ async def start_youtube_auth(request: Request):
 
 
 @app.get("/api/integrations/youtube/auth-status")
-async def get_youtube_auth_status():
+def get_youtube_auth_status():
     """Return the actual state reported by the OAuth helper process."""
     with _YOUTUBE_AUTH_LOCK:
         return dict(_YOUTUBE_AUTH_STATE)
 
 
 @app.post("/api/integrations/youtube/disconnect")
-async def disconnect_youtube(request: Request):
+def disconnect_youtube(request: Request):
     """Disconnect YouTube by removing the cached token."""
     verify_dashboard_auth(request)
     token_file = ROOT_DIR / "youtube_token.json"
     if token_file.exists():
         token_file.unlink()
+    _clear_integrations_status_cache()
     return {"status": "success", "message": "YouTube account disconnected"}
 
 
@@ -3286,7 +3661,7 @@ def require_admin(request: Request) -> Dict[str, Any]:
 
 
 @app.get("/api/admin/whoami")
-async def admin_whoami(request: Request):
+def admin_whoami(request: Request):
     try:
         user = require_admin(request)
         return {"is_admin": True, "email": user["email"]}
@@ -3297,7 +3672,7 @@ async def admin_whoami(request: Request):
 
 
 @app.get("/api/admin/users")
-async def admin_list_users(request: Request):
+def admin_list_users(request: Request):
     require_admin(request)
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     if not key:
@@ -3344,14 +3719,15 @@ async def admin_list_users(request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/ban")
-async def admin_ban_user(user_id: str, request: Request):
+def admin_ban_user(user_id: str, request: Request):
     require_admin(request)
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     import httpx
     resp = httpx.put(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users/{user_id}",
                      headers={"apikey": key, "Authorization": f"Bearer {key}",
                               "Content-Type": "application/json"},
-                     content=json.dumps({"ban_duration": "876000h"}))  # ~100 years
+                     content=json.dumps({"ban_duration": "876000h"}),
+                     timeout=15.0)  # ~100 years
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Ban failed")
     logger.info("Admin banned user %s", user_id)
@@ -3359,14 +3735,15 @@ async def admin_ban_user(user_id: str, request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/unban")
-async def admin_unban_user(user_id: str, request: Request):
+def admin_unban_user(user_id: str, request: Request):
     require_admin(request)
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     import httpx
     resp = httpx.put(f"{os.getenv('SUPABASE_URL', '')}/auth/v1/admin/users/{user_id}",
                      headers={"apikey": key, "Authorization": f"Bearer {key}",
                               "Content-Type": "application/json"},
-                     content=json.dumps({"ban_duration": "none"}))
+                     content=json.dumps({"ban_duration": "none"}),
+                     timeout=15.0)
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail="Unban failed")
     logger.info("Admin unbanned user %s", user_id)
@@ -3375,10 +3752,14 @@ async def admin_unban_user(user_id: str, request: Request):
 
 @app.post("/api/admin/users/{user_id}/quota")
 async def admin_set_user_quota(user_id: str, request: Request):
-    require_admin(request)
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-    if not key:
-        raise HTTPException(status_code=503, detail="Supabase not configured")
+    def _auth_check():
+        require_admin(request)
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not key:
+            raise HTTPException(status_code=503, detail="Supabase not configured")
+        return key
+
+    key = await asyncio.to_thread(_auth_check)
     body = await request.json()
     try:
         gb = float(body.get("quota_gb", 0))
@@ -3387,28 +3768,36 @@ async def admin_set_user_quota(user_id: str, request: Request):
     if gb <= 0 or gb > 10.0:
         raise HTTPException(status_code=400, detail="quota_gb must be between 0.1 and 10 (decimal GB)")
     quota_bytes = round(gb * 1_000_000_000)
-    import httpx
-    resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_quota",
-                      headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                      json={"p_user_id": user_id, "p_quota_bytes": quota_bytes},
-                      timeout=15.0)
-    if resp.status_code not in (200, 204):
-        err = ""
-        try:
-            err = resp.json().get("message")
-        except Exception:
-            err = resp.text
-        raise HTTPException(status_code=400, detail=err or "Quota update failed")
-    logger.info("Admin set quota for user %s to %s GB", user_id, gb)
-    return {"quota_gb": gb, "quota_bytes": quota_bytes}
+
+    def _update_quota():
+        import httpx
+        resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_quota",
+                          headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"p_user_id": user_id, "p_quota_bytes": quota_bytes},
+                          timeout=15.0)
+        if resp.status_code not in (200, 204):
+            err = ""
+            try:
+                err = resp.json().get("message")
+            except Exception:
+                err = resp.text
+            raise HTTPException(status_code=400, detail=err or "Quota update failed")
+        logger.info("Admin set quota for user %s to %s GB", user_id, gb)
+        return {"quota_gb": gb, "quota_bytes": quota_bytes}
+
+    return await asyncio.to_thread(_update_quota)
 
 
 @app.post("/api/admin/users/{user_id}/priority")
 async def admin_set_user_priority(user_id: str, request: Request):
-    require_admin(request)
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-    if not key:
-        raise HTTPException(status_code=503, detail="Supabase not configured")
+    def _auth_check():
+        require_admin(request)
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not key:
+            raise HTTPException(status_code=503, detail="Supabase not configured")
+        return key
+
+    key = await asyncio.to_thread(_auth_check)
     body = await request.json()
     try:
         prio = int(body.get("priority", 100))
@@ -3416,24 +3805,28 @@ async def admin_set_user_priority(user_id: str, request: Request):
         raise HTTPException(status_code=400, detail="priority must be an integer between 1 and 1000")
     if prio < 1 or prio > 1000:
         raise HTTPException(status_code=400, detail="priority must be an integer between 1 and 1000")
-    import httpx
-    resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_priority",
-                      headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                      json={"p_user_id": user_id, "p_priority": prio},
-                      timeout=15.0)
-    if resp.status_code not in (200, 204):
-        err = ""
-        try:
-            err = resp.json().get("message")
-        except Exception:
-            err = resp.text
-        raise HTTPException(status_code=502, detail=err or "Priority update failed")
-    logger.info("Admin set priority for user %s to %s", user_id, prio)
-    return {"priority": prio}
+
+    def _update_priority():
+        import httpx
+        resp = httpx.post(f"{os.getenv('SUPABASE_URL', '')}/rest/v1/rpc/cloud_set_user_priority",
+                          headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"p_user_id": user_id, "p_priority": prio},
+                          timeout=15.0)
+        if resp.status_code not in (200, 204):
+            err = ""
+            try:
+                err = resp.json().get("message")
+            except Exception:
+                err = resp.text
+            raise HTTPException(status_code=502, detail=err or "Priority update failed")
+        logger.info("Admin set priority for user %s to %s", user_id, prio)
+        return {"priority": prio}
+
+    return await asyncio.to_thread(_update_priority)
 
 
 @app.get("/api/admin/stats")
-async def admin_stats(request: Request):
+def admin_stats(request: Request):
     """High-level processing counters from the local store (no user content)."""
     require_admin(request)
     with db.get_db_connection() as conn:
@@ -3444,7 +3837,7 @@ async def admin_stats(request: Request):
 
 
 @app.get("/api/auth/session")
-async def auth_session(request: Request):
+def auth_session(request: Request):
     """Who am I? Verifies the app's Supabase session over the local link."""
     user = get_authenticated_user(request)
     return {"user_id": user["user_id"], "email": user["email"]}
@@ -3778,7 +4171,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard_home():
+def dashboard_home():
     """Serve the single-page dashboard HTML with the precompiled stylesheet inlined (D14)."""
     template_path = Path(__file__).parent / "templates" / "index.html"
     if template_path.exists():
@@ -3795,7 +4188,7 @@ if STATIC_DIR.exists():
 
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def get_favicon_ico():
+def get_favicon_ico():
     ico = STATIC_DIR / "favicon.ico"
     if ico.exists():
         return FileResponse(ico, media_type="image/x-icon")
@@ -3803,7 +4196,7 @@ async def get_favicon_ico():
 
 
 @app.get("/favicon.svg", include_in_schema=False)
-async def get_favicon_svg():
+def get_favicon_svg():
     svg = STATIC_DIR / "favicon.svg"
     if svg.exists():
         return FileResponse(svg, media_type="image/svg+xml")
@@ -3811,7 +4204,7 @@ async def get_favicon_svg():
 
 
 @app.get("/apple-touch-icon.png", include_in_schema=False)
-async def get_apple_touch_icon():
+def get_apple_touch_icon():
     png = STATIC_DIR / "apple-touch-icon.png"
     if png.exists():
         return FileResponse(png, media_type="image/png")
@@ -3819,7 +4212,7 @@ async def get_apple_touch_icon():
 
 
 @app.get("/site.webmanifest", include_in_schema=False)
-async def get_site_manifest():
+def get_site_manifest():
     manifest = STATIC_DIR / "site.webmanifest"
     if manifest.exists():
         return FileResponse(manifest, media_type="application/manifest+json")
@@ -3839,12 +4232,18 @@ if STUDIO_DIR.exists():
 
     @app.get("/studio/", response_class=HTMLResponse)
     @app.get("/studio/{full_path:path}", response_class=HTMLResponse)
-    async def serve_studio(full_path: str = ""):
+    def serve_studio(full_path: str = ""):
         # Check if requesting a direct static file in STUDIO_DIR (e.g. favicon, manifest)
-        target = (STUDIO_DIR / full_path).resolve()
-        if full_path and target.exists() and target.is_file() and str(target).startswith(str(STUDIO_DIR.resolve())):
-            return FileResponse(target)
-        index_file = STUDIO_DIR / "index.html"
+        studio_root = STUDIO_DIR.resolve()
+        if full_path:
+            if "\\" in full_path or "\x00" in full_path:
+                raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+            target = (studio_root / full_path).resolve()
+            if not target.is_relative_to(studio_root):
+                raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+            if target.exists() and target.is_file():
+                return FileResponse(target)
+        index_file = studio_root / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
         raise HTTPException(status_code=404, detail="Studio interface not found")
@@ -3852,7 +4251,7 @@ if STUDIO_DIR.exists():
 
 # Font Library & Custom Font Import APIs
 @app.get("/api/fonts")
-async def list_fonts():
+def list_fonts():
     """List all available fonts in the Dispatch creator library (bundled and custom)."""
     manifest_path = FONTS_DIR / "fonts_manifest.json"
     fonts = []
@@ -3904,7 +4303,7 @@ _FONT_IMPORT_MAX_BYTES = 20 * 1024 * 1024  # D4: fonts are vector outline data, 
 @app.post("/api/fonts/import")
 async def import_custom_font(request: Request, file: UploadFile = File(...)):
     """Validate, register, and save a custom TTF or OTF font file."""
-    verify_dashboard_auth(request)
+    await asyncio.to_thread(verify_dashboard_auth, request)
 
     # D4 hardening: reject oversized font uploads from Content-Length before the
     # handler reads them into memory (413 with an explicit, actionable detail).
@@ -3924,11 +4323,11 @@ async def import_custom_font(request: Request, file: UploadFile = File(...)):
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing font file")
-    
+
     ext = Path(file.filename).suffix.lower()
     if ext not in (".ttf", ".otf"):
         raise HTTPException(status_code=400, detail="Only .ttf and .otf font files are supported")
-    
+
     content = await file.read()
     if len(content) < 1024:
         raise HTTPException(status_code=400, detail="Invalid or corrupt font file (file too small)")
@@ -3937,79 +4336,82 @@ async def import_custom_font(request: Request, file: UploadFile = File(...)):
             status_code=413,
             detail=f"Font file too large: {len(content)} bytes exceeds the {_FONT_IMPORT_MAX_BYTES}-byte (20 MB) import limit"
         )
-    
-    # Validate with fontTools
-    try:
-        from io import BytesIO
-        from fontTools.ttLib import TTFont
-        tt = TTFont(BytesIO(content))
-        detected_family = None
-        for record in tt["name"].names:
-            if record.nameID in (1, 4, 16):
-                try:
-                    s = record.toUnicode()
-                    if s and len(s) > 1 and not detected_family:
-                        detected_family = s
-                except Exception:
-                    pass
-        if not detected_family:
-            detected_family = Path(file.filename).stem
 
-        weight = "400"
-        if "OS/2" in tt:
-            weight = str(getattr(tt["OS/2"], "usWeightClass", 400))
-    except Exception as e:
-        logger.error("Failed to parse font %s: %s", file.filename, e)
-        raise HTTPException(status_code=400, detail=f"Corrupt or invalid font format: {str(e)}")
-
-    clean_name = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", file.filename)
-    dest_path = FONTS_DIR / clean_name
-    with open(dest_path, "wb") as f:
-        f.write(content)
-
-    font_entry = {
-        "family": detected_family,
-        "category": "Custom",
-        "weights": [weight],
-        "filename": clean_name,
-        "license": "Custom Imported",
-        "is_valid": True,
-        "is_custom": True,
-        "url": f"/api/fonts/{clean_name}"
-    }
-
-    manifest_path = FONTS_DIR / "fonts_manifest.json"
-    manifest = []
-    if manifest_path.exists():
+    def _parse_and_save_font():
+        # Validate with fontTools
         try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        except Exception:
-            manifest = []
-    
-    manifest = [m for m in manifest if m.get("filename") != clean_name and m.get("family") != detected_family]
-    manifest.append(font_entry)
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
+            from io import BytesIO
+            from fontTools.ttLib import TTFont
+            tt = TTFont(BytesIO(content))
+            detected_family = None
+            for record in tt["name"].names:
+                if record.nameID in (1, 4, 16):
+                    try:
+                        s = record.toUnicode()
+                        if s and len(s) > 1 and not detected_family:
+                            detected_family = s
+                    except Exception:
+                        pass
+            if not detected_family:
+                detected_family = Path(file.filename).stem
 
-    logger.info("Successfully imported custom font: %s (%s)", detected_family, clean_name)
-    return {"success": True, "font": font_entry}
+            weight = "400"
+            if "OS/2" in tt:
+                weight = str(getattr(tt["OS/2"], "usWeightClass", 400))
+        except Exception as e:
+            logger.error("Failed to parse font %s: %s", file.filename, e)
+            raise HTTPException(status_code=400, detail=f"Corrupt or invalid font format: {str(e)}")
+
+        clean_name = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", file.filename)
+        dest_path = FONTS_DIR / clean_name
+        with open(dest_path, "wb") as f:
+            f.write(content)
+
+        font_entry = {
+            "family": detected_family,
+            "category": "Custom",
+            "weights": [weight],
+            "filename": clean_name,
+            "license": "Custom Imported",
+            "is_valid": True,
+            "is_custom": True,
+            "url": f"/api/fonts/{clean_name}"
+        }
+
+        manifest_path = FONTS_DIR / "fonts_manifest.json"
+        manifest = []
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+            except Exception:
+                manifest = []
+
+        manifest = [m for m in manifest if m.get("filename") != clean_name and m.get("family") != detected_family]
+        manifest.append(font_entry)
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+        logger.info("Successfully imported custom font: %s (%s)", detected_family, clean_name)
+        return {"success": True, "font": font_entry}
+
+    return await asyncio.to_thread(_parse_and_save_font)
 
 
 @app.get("/api/fonts/{filename}")
-async def serve_font(filename: str):
+def serve_font(filename: str):
     """Serve font binary asset with proper MIME type."""
+    if "/" in filename or "\\" in filename or ".." in filename or "\x00" in filename:
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+    fonts_root = FONTS_DIR.resolve()
     clean_filename = Path(filename).name
-    target_file = (FONTS_DIR / clean_filename).resolve()
-    if not target_file.exists() or not str(target_file).startswith(str(FONTS_DIR.resolve())):
+    target_file = (fonts_root / clean_filename).resolve()
+    if not target_file.is_relative_to(fonts_root) or not target_file.exists() or not target_file.is_file():
         raise HTTPException(status_code=404, detail="Font file not found")
-    
+
     ext = target_file.suffix.lower()
     media_type = "font/ttf" if ext == ".ttf" else ("font/otf" if ext == ".otf" else "application/octet-stream")
     return FileResponse(target_file, media_type=media_type)
-
-
-
 
 
 # --- Default Editing Template Endpoints ---
@@ -4017,7 +4419,7 @@ async def serve_font(filename: str):
 @app.get("/api/template/default")
 @app.get("/api/captions/templates")
 @app.get("/api/template")
-async def get_default_template_endpoint(request: Request):
+def get_default_template_endpoint(request: Request):
     """Retrieve the current default editing template for the caller or system."""
     caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
     template = db.get_default_template(user_id=caller_user_id)
@@ -4031,8 +4433,11 @@ get_caption_template = get_default_template_endpoint
 @app.post("/api/template")
 async def save_default_template_endpoint(request: Request, payload: Optional[Any] = Body(None)):
     """Save or update the caller's default editing template."""
-    verify_dashboard_auth(request)
-    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    def _auth_and_identity():
+        verify_dashboard_auth(request)
+        return resolve_caller_user_id(request, allow_lan_peer=True)
+
+    caller_user_id = await asyncio.to_thread(_auth_and_identity)
 
     raw_data: Any = payload
     if raw_data is None:
@@ -4068,7 +4473,7 @@ async def save_default_template_endpoint(request: Request, payload: Optional[Any
         "updated_at": raw_data.get("updated_at") or datetime.now(timezone.utc).isoformat(),
     }
 
-    saved = db.save_default_template(sanitized, user_id=caller_user_id)
+    saved = await asyncio.to_thread(db.save_default_template, sanitized, user_id=caller_user_id)
     return {
         "status": "success",
         "template": saved,
@@ -4081,7 +4486,7 @@ update_default_template = save_default_template_endpoint
 
 
 @app.get("/api/template/sample-video")
-async def get_sample_template_video(orientation: str = "portrait"):
+def get_sample_template_video(orientation: str = "portrait"):
     """Serve reference sample video for template editor preview."""
     root_dir = Path(__file__).resolve().parent.parent.parent
     if orientation == "landscape":

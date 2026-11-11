@@ -1,5 +1,4 @@
-import { supabase, currentSession } from './supabase';
-import { listConnectedAccounts } from '../accounts/accountsService';
+import type { ConnectedAccount } from '../accounts/accountsService';
 
 /**
  * Route A credential boundary: hands the Supabase session JWT plus the primary
@@ -12,7 +11,18 @@ import { listConnectedAccounts } from '../accounts/accountsService';
 let pushedAt = 0;
 let inFlight = false;
 
+export function selectSourceVaultYouTubeAccount(
+  accounts: ConnectedAccount[] | null | undefined
+): ConnectedAccount | undefined {
+  if (!Array.isArray(accounts)) return undefined;
+  const eligible = accounts.filter(
+    (account) => account.provider === 'youtube' && account.metadata?.is_source_vault !== false
+  );
+  return eligible.find((account) => account.metadata?.is_source_vault === true) || eligible[0];
+}
+
 function nativeBridge(): { pushCloudSession: (payload: string) => boolean } | null {
+  if (typeof window === 'undefined') return null;
   const bridge = (window as any).DispatchBridge;
   return typeof bridge?.pushCloudSession === 'function' ? bridge : null;
 }
@@ -22,6 +32,10 @@ export async function pushCloudSessionToNative(reason: string): Promise<void> {
   if (!bridge || inFlight || Date.now() - pushedAt < 5_000) return;
   inFlight = true;
   try {
+    const [{ currentSession }, { listConnectedAccounts }] = await Promise.all([
+      import('./supabase'),
+      import('../accounts/accountsService'),
+    ]);
     const session = await currentSession();
     if (!session) {
       // No session does NOT mean "signed out": it also occurs transiently
@@ -33,10 +47,17 @@ export async function pushCloudSessionToNative(reason: string): Promise<void> {
       return;
     }
     const accounts = await listConnectedAccounts(session.access_token);
-    const youtube = accounts?.find((account) => account.provider === 'youtube');
+    if (accounts === null) {
+      // Transient fetch failure: do not overwrite an active vault binding.
+      return;
+    }
+    const youtube = selectSourceVaultYouTubeAccount(accounts);
+    if (!youtube?.id) {
+      return;
+    }
     bridge.pushCloudSession(JSON.stringify({
       access_token: session.access_token,
-      account_id: youtube?.id || '',
+      account_id: youtube.id,
     }));
     pushedAt = Date.now();
   } catch (e) {
@@ -49,18 +70,20 @@ export async function pushCloudSessionToNative(reason: string): Promise<void> {
 export function startCloudSessionBootstrap(): void {
   if (!nativeBridge()) return;
   void pushCloudSessionToNative('initial');
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-      void pushCloudSessionToNative('auth');
-    }
-    if (event === 'SIGNED_OUT') {
-      try {
-        nativeBridge()?.pushCloudSession(JSON.stringify({ cleared: true }));
-      } catch {
-        // Bridge may be gone during teardown
+  void import('./supabase').then(({ supabase }) => {
+    supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        void pushCloudSessionToNative('auth');
       }
-    }
-  });
+      if (event === 'SIGNED_OUT') {
+        try {
+          nativeBridge()?.pushCloudSession(JSON.stringify({ cleared: true }));
+        } catch {
+          // Bridge may be gone during teardown
+        }
+      }
+    });
+  }).catch(() => {});
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && Date.now() - pushedAt > 25_000) {
       void pushCloudSessionToNative('visible');

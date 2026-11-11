@@ -99,16 +99,33 @@ def is_ambiguous_network_error(exc: Exception) -> bool:
 
 def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
     """Query YouTube Data API search for dispatch_idempotency_key to determine if video was uploaded."""
+    import os
+
     service = None
     account_id = job.get("account_id")
     user_id = job.get("user_id")
+    idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
+    if user_id and (account_id or os.getenv("DISPATCH_WORKER_URL") or os.getenv("DISPATCH_CLOUD_WORKER_URL")):
+        try:
+            from dispatch.youtube_connections import reconcile_youtube_via_worker
+            worker_res = reconcile_youtube_via_worker(account_id or "", idempotency_key, user_id=user_id)
+            if worker_res.get("reconciled"):
+                return worker_res
+        except PermissionError:
+            raise
+        except Exception as w_err:
+            logger.debug("Worker reconcile fallback for job %s: %s", account_id, w_err)
     if account_id:
         try:
             from dispatch.youtube_connections import get_account_credentials
-            creds = get_account_credentials(account_id, user_id=user_id)
+            creds = get_account_credentials(account_id, user_id=user_id, provider="youtube")
+            if creds and creds.get("needs_reauth"):
+                raise PermissionError(str(creds.get("error") or "YouTube authorization revoked; reconnect required"))
             if creds:
                 from dispatch.publisher.youtube import build_youtube_service_from_credentials
                 service = build_youtube_service_from_credentials(creds)
+        except PermissionError:
+            raise
         except Exception as e:
             logger.debug("Credentials lookup for reconcile job %s: %s", account_id, e)
     if not service and not user_id:
@@ -117,7 +134,6 @@ def reconcile_youtube_job(job: Dict[str, Any]) -> Dict[str, Any]:
     if not service:
         return {"reconciled": False, "reason": "YouTube service unavailable or unconfigured credentials"}
 
-    idempotency_key = job.get("idempotency_key") or f"idem_{job['clip_id']}_{job['platform']}"
     marker = f"dispatch_idempotency_key:{idempotency_key}"
     try:
         req = service.search().list(part="snippet", forMine=True, q=marker, type="video", maxResults=5)
@@ -266,9 +282,17 @@ def _process_outbox_queue_internal() -> int:
                 if account_id:
                     try:
                         from dispatch.youtube_connections import get_account_credentials
-                        p_creds = get_account_credentials(account_id, user_id=user_id)
+                        p_creds = get_account_credentials(account_id, user_id=user_id, provider="youtube")
                     except Exception as ce:
                         logger.debug("Account credentials lookup for processing job %s: %s", account_id, ce)
+                if p_creds and p_creds.get("needs_reauth"):
+                    with db.get_db_connection() as conn:
+                        conn.execute("""
+                            UPDATE publishing_outbox
+                            SET status = 'blocked_needs_auth', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (str(p_creds.get("error") or "YouTube authorization revoked"), pjob["id"]))
+                    continue
                 if p_creds:
                     from dispatch.publisher.youtube import build_youtube_service_from_credentials
                     svc = build_youtube_service_from_credentials(p_creds)
@@ -415,9 +439,16 @@ def _process_outbox_queue_internal() -> int:
             if account_id:
                 try:
                     from dispatch.youtube_connections import get_account_credentials
-                    account_creds = get_account_credentials(account_id, user_id=user_id)
+                    account_creds = get_account_credentials(account_id, user_id=user_id, provider=platform)
+                except PermissionError:
+                    raise
                 except Exception as ce:
                     logger.debug("Account credentials lookup note for %s: %s", account_id, ce)
+
+            if account_creds and account_creds.get("needs_reauth"):
+                raise PermissionError(
+                    str(account_creds.get("error") or f"{platform} authorization expired or revoked; reconnect required.")
+                )
 
             if user_id and (not account_id or not account_creds):
                 err_msg = f"User-owned job {job_id} requires a connected and verified {platform} account. No valid credentials found."

@@ -20,15 +20,17 @@ class DispatchApplication : Application() {
         // app updates); the engine registers the single remaining periodic.
         WorkManager.getInstance(this).cancelUniqueWork("dispatch_youtube_uploads_periodic")
 
-        // Resume any pending/interrupted on-device render or cloud upload jobs
+        // Resume all eligible pending/interrupted on-device render or cloud upload jobs
         applicationScope.launch(Dispatchers.IO) {
             try {
                 val db = AppDatabase.getDatabase(this@DispatchApplication)
-                val pendingJobs = db.recordingDao().getPendingRenderJobs()
-                if (pendingJobs.isNotEmpty()) {
-                    val firstJob = pendingJobs.first()
-                    android.util.Log.i("DispatchApplication", "Resuming pending render job ${firstJob.jobId} for clip ${firstJob.clipId}")
-                    RenderForegroundService.start(this@DispatchApplication, firstJob.jobId, firstJob.clipId)
+                val eligibleJobs = RenderForegroundService.loadEligiblePendingRenderJobs(db)
+                if (eligibleJobs.isNotEmpty()) {
+                    android.util.Log.i(
+                        "DispatchApplication",
+                        "Resuming ${eligibleJobs.size} pending render job(s): ${eligibleJobs.joinToString { it.jobId }}"
+                    )
+                    RenderForegroundService.startPendingJobs(this@DispatchApplication, eligibleJobs)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("DispatchApplication", "Failed to check pending render jobs on startup: ${e.message}")

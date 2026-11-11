@@ -4,7 +4,38 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from dispatch.youtube_connections import atomic_write_token_file as _atomic_write_token_file
+
 logger = logging.getLogger("dispatch.publisher.youtube")
+
+
+def _is_revoked_refresh_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return any(tok in msg for tok in ("invalid_grant", "revoked", "expired or revoked", "unauthorized_client"))
+
+
+def _credentials_from_data(credentials_data: Dict[str, Any]):
+    """Build Google OAuth2 Credentials from either short-lived access_token or local refresh_token."""
+    from google.oauth2.credentials import Credentials
+
+    if credentials_data.get("needs_reauth"):
+        raise PermissionError(
+            str(credentials_data.get("error") or "YouTube account authorization expired or revoked; reconnect required.")
+        )
+    ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
+    acc_tok = credentials_data.get("access_token")
+    # Short-lived brokered credentials carry access_token only (never refresh_token / client_secret).
+    if acc_tok and not ref_tok:
+        return Credentials(token=acc_tok)
+    if ref_tok and acc_tok and ref_tok == acc_tok and credentials_data.get("provider"):
+        return Credentials(token=acc_tok)
+    return Credentials(
+        token=acc_tok,
+        refresh_token=ref_tok,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.getenv("YOUTUBE_CLIENT_ID"),
+        client_secret=os.getenv("YOUTUBE_CLIENT_SECRET"),
+    )
 
 
 def build_youtube_service_from_credentials(
@@ -13,22 +44,15 @@ def build_youtube_service_from_credentials(
 ):
     """Build a Google YouTube v3 Resource object from credentials_data dict."""
     from googleapiclient.discovery import build
-    from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request as GoogleAuthRequest
 
-    ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
-    acc_tok = credentials_data.get("access_token")
-    creds = Credentials(
-        token=acc_tok,
-        refresh_token=ref_tok,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.getenv("YOUTUBE_CLIENT_ID"),
-        client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
-    )
+    creds = _credentials_from_data(credentials_data)
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(GoogleAuthRequest())
         except Exception as refresh_err:
+            if _is_revoked_refresh_error(refresh_err):
+                raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
             logger.warning("Failed to refresh account-specific YouTube OAuth token: %s", refresh_err)
     if timeout_seconds is not None:
         import httplib2
@@ -108,19 +132,13 @@ def upload_youtube_short(
         from google.auth.transport.requests import Request as GoogleAuthRequest
 
         if has_account_creds and credentials_data:
-            ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
-            acc_tok = credentials_data.get("access_token")
-            creds = Credentials(
-                token=acc_tok,
-                refresh_token=ref_tok,
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=os.getenv("YOUTUBE_CLIENT_ID"),
-                client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
-            )
+            creds = _credentials_from_data(credentials_data)
             if creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(GoogleAuthRequest())
                 except Exception as refresh_err:
+                    if _is_revoked_refresh_error(refresh_err):
+                        raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
                     logger.warning("Failed to refresh account-specific YouTube OAuth token: %s", refresh_err)
         elif token_file and token_file.exists():
             creds = Credentials.from_authorized_user_file(str(token_file))
@@ -128,10 +146,11 @@ def upload_youtube_short(
                 try:
                     creds.refresh(GoogleAuthRequest())
                     if hasattr(creds, "to_json"):
-                        with open(token_file, "w", encoding="utf-8") as f:
-                            f.write(creds.to_json())
+                        _atomic_write_token_file(token_file, creds.to_json())
                         logger.info("Refreshed and persisted YouTube OAuth token in publisher to %s", token_file)
                 except Exception as refresh_err:
+                    if _is_revoked_refresh_error(refresh_err):
+                        raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
                     logger.warning("Failed to refresh YouTube OAuth token in publisher: %s", refresh_err)
         else:
             creds = Credentials(
@@ -145,6 +164,8 @@ def upload_youtube_short(
                 try:
                     creds.refresh(GoogleAuthRequest())
                 except Exception as refresh_err:
+                    if _is_revoked_refresh_error(refresh_err):
+                        raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
                     logger.warning("Failed to refresh env-based token in publisher: %s", refresh_err)
 
         youtube = build("youtube", "v3", credentials=creds)
@@ -212,52 +233,43 @@ def get_authenticated_youtube_service(
     from dispatch.config import ROOT_DIR, YOUTUBE_TOKEN_PATH
 
     creds = None
+    refreshed_token_file: Optional[Path] = None
 
     # 1. Direct credentials data
-    if credentials_data and (credentials_data.get("refresh_token") or credentials_data.get("token") or credentials_data.get("access_token")):
-        ref_tok = credentials_data.get("refresh_token") or credentials_data.get("token")
-        acc_tok = credentials_data.get("access_token")
-        creds = Credentials(
-            token=acc_tok,
-            refresh_token=ref_tok,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv("YOUTUBE_CLIENT_ID"),
-            client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
-        )
+    if credentials_data and (credentials_data.get("needs_reauth") or credentials_data.get("refresh_token") or credentials_data.get("token") or credentials_data.get("access_token")):
+        creds = _credentials_from_data(credentials_data)
 
-    # 2. Account-specific vault lookup
+    # 2. Account-specific Worker broker lookup (short-lived access token only)
     if not creds and account_id:
         try:
             from dispatch.youtube_connections import get_account_credentials
-            acc_creds = get_account_credentials(account_id, user_id=user_id)
-            if acc_creds and (acc_creds.get("refresh_token") or acc_creds.get("token") or acc_creds.get("access_token")):
-                ref_tok = acc_creds.get("refresh_token") or acc_creds.get("token")
-                acc_tok = acc_creds.get("access_token")
-                creds = Credentials(
-                    token=acc_tok,
-                    refresh_token=ref_tok,
-                    token_uri="https://oauth2.googleapis.com/token",
-                    client_id=os.getenv("YOUTUBE_CLIENT_ID"),
-                    client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+            acc_creds = get_account_credentials(account_id, user_id=user_id, provider="youtube")
+            if acc_creds and acc_creds.get("needs_reauth"):
+                raise PermissionError(
+                    str(acc_creds.get("error") or "YouTube account authorization revoked; reconnect required.")
                 )
+            if acc_creds and (acc_creds.get("access_token") or acc_creds.get("refresh_token") or acc_creds.get("token")):
+                creds = _credentials_from_data(acc_creds)
+        except PermissionError:
+            raise
         except Exception as e:
             logger.debug("Failed to resolve account credentials for %s: %s", account_id, e)
 
-    # 3. User default refresh token vault lookup
+    # 3. User-default Worker access-token broker lookup (no raw refresh_token on PC)
     if not creds and user_id:
         try:
-            from dispatch.youtube_connections import get_user_refresh_token
-            ref_tok = get_user_refresh_token(user_id)
-            if ref_tok:
-                creds = Credentials(
-                    token=None,
-                    refresh_token=ref_tok,
-                    token_uri="https://oauth2.googleapis.com/token",
-                    client_id=os.getenv("YOUTUBE_CLIENT_ID"),
-                    client_secret=os.getenv("YOUTUBE_CLIENT_SECRET")
+            from dispatch.youtube_connections import get_user_youtube_access_token
+            user_tok = get_user_youtube_access_token(user_id)
+            if user_tok and user_tok.get("needs_reauth"):
+                raise PermissionError(
+                    str(user_tok.get("error") or "YouTube account authorization revoked; reconnect required.")
                 )
+            if user_tok and user_tok.get("access_token"):
+                creds = _credentials_from_data(user_tok)
+        except PermissionError:
+            raise
         except Exception as e:
-            logger.debug("Failed to resolve user refresh token for %s: %s", user_id, e)
+            logger.debug("Failed to resolve user access token for %s: %s", user_id, e)
 
     # 4. Local file token lookup
     if not creds:
@@ -279,6 +291,7 @@ def get_authenticated_youtube_service(
         if token_file and token_file.exists():
             try:
                 creds = Credentials.from_authorized_user_file(str(token_file))
+                refreshed_token_file = token_file
             except Exception as e:
                 logger.debug("Failed to load local token file %s: %s", token_file, e)
 
@@ -298,7 +311,11 @@ def get_authenticated_youtube_service(
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(GoogleAuthRequest())
+            if refreshed_token_file is not None and hasattr(creds, "to_json"):
+                _atomic_write_token_file(refreshed_token_file, creds.to_json())
         except Exception as refresh_err:
+            if _is_revoked_refresh_error(refresh_err):
+                raise PermissionError(f"YouTube OAuth token expired or revoked: {refresh_err}") from refresh_err
             logger.warning("Failed to refresh YouTube OAuth token: %s", refresh_err)
 
     if timeout_seconds is not None:

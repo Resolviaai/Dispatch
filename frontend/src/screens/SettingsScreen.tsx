@@ -107,6 +107,11 @@ const FacebookIcon = () => (
   </svg>
 );
 
+const sanitizeFeedbackText = (text: string): string =>
+  text
+    .replace(/([?&](?:access_token|refresh_token|code|token|secret)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1[redacted]');
+
 /** Profile image with the provider's own icon as a failure/unconnected fallback. */
 const AccountAvatar: React.FC<{
   src?: string | null;
@@ -285,11 +290,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
         const provName = data.provider
           ? (data.provider.charAt(0).toUpperCase() + data.provider.slice(1))
           : 'Account';
-        setFeedback(data.message || `Successfully connected ${provName}!`);
+        setFeedback(sanitizeFeedbackText(data.message || `Successfully connected ${provName}!`));
         refreshAccounts();
         refreshCloudStorage();
       } else if (data.status === 'error') {
-        setFeedback(data.message || data.error || 'Connection failed. Please check your account permissions and retry.');
+        setFeedback(sanitizeFeedbackText(data.message || data.error || 'Connection failed. Please check your account permissions and retry.'));
       } else {
         refreshAccounts();
         refreshCloudStorage();
@@ -338,6 +343,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
 
   const handleToggleRole = async (account: ConnectedAccount, role: 'source_vault' | 'publisher') => {
     if (!jwtToken) return;
+    const previousMetadata = account.metadata ? { ...account.metadata } : {};
     const currentVault = account.metadata?.is_source_vault !== false;
     const currentPub = account.metadata?.is_publisher !== false;
     const updated = role === 'source_vault'
@@ -349,8 +355,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
       metadata: { ...(a.metadata || {}), ...updated }
     } : a));
 
-    setFeedback(`Updated ${account.account_name} roles.`);
-    await updateAccountRoles(jwtToken, account.id, updated);
+    const ok = await updateAccountRoles(jwtToken, account.id, updated);
+    if (ok) {
+      setFeedback(`Updated ${account.account_name} roles.`);
+    } else {
+      setAccounts(prev => prev.map(a => a.id === account.id ? {
+        ...a,
+        metadata: previousMetadata
+      } : a));
+      setFeedback(`Could not update ${account.account_name} roles. Please retry.`);
+    }
   };
 
   const handleConnectProvider = async (provider: 'instagram' | 'linkedin' | 'twitter' | 'facebook') => {
@@ -458,14 +472,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   };
 
   const handleDeleteGeminiKey = async () => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem('dispatch_gemini_api_key');
+    if (!jwtToken) {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('dispatch_gemini_api_key');
+      }
+      setGeminiStatus({ configured: false, key_prefix: null });
+      setFeedback('Local Gemini API key removed.');
+      return;
     }
-    if (!jwtToken) return;
     const ok = await deleteGeminiKey(jwtToken);
     if (ok) {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('dispatch_gemini_api_key');
+      }
       setGeminiStatus({ configured: false, key_prefix: null });
       setFeedback('Personal Gemini API key removed.');
+    } else {
+      setFeedback('Could not remove Gemini API key from cloud vault. Please retry.');
     }
   };
 
@@ -499,7 +522,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
   const facebookAccounts = accounts.filter(a => a.provider === 'facebook');
   const linkedinAccount = accounts.find(a => a.provider === 'linkedin');
   const twitterAccount = accounts.find(a => a.provider === 'twitter');
-  const facebookAccount = facebookAccounts[0] ?? null;
   const creatorAvatar = youtubeAccounts[0]?.avatar_url || twitterAccount?.avatar_url || linkedinAccount?.avatar_url || null;
 
   // Global Activity & Notification Center
@@ -859,37 +881,55 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ pcHost = 'localh
                 </div>
               )}
 
-              {/* Facebook */}
-              <div className="py-3 flex items-center justify-between gap-3 text-sm">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <AccountAvatar
-                    src={facebookAccount?.avatar_url}
-                    fallbackSrc={creatorAvatar}
-                    fallback={<FacebookIcon />}
-                  />
-                  <div className="min-w-0">
-                    <p className="font-medium text-text-main truncate">Facebook Pages</p>
-                    <p className="text-xs text-text-muted truncate">
-                      {facebookAccount ? facebookAccount.account_name : 'Not connected'}
-                    </p>
-                  </div>
-                </div>
-                {facebookAccount ? (
-                  <button
-                    onClick={() => handleDisconnectAccount(facebookAccount)}
-                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-danger/20 hover:text-danger text-xs font-medium text-text-secondary border border-border transition-colors flex items-center justify-center shrink-0"
-                  >
-                    Disconnect
-                  </button>
-                ) : (
+              {/* Facebook Pages — one row per connected page */}
+              {facebookAccounts.length > 0 ? (
+                <>
+                  {facebookAccounts.map((acc) => (
+                    <div key={acc.id} className="py-3 flex items-center justify-between gap-3 text-sm">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AccountAvatar
+                          src={acc.avatar_url}
+                          fallbackSrc={creatorAvatar}
+                          fallback={<FacebookIcon />}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-medium text-text-main truncate">{acc.account_name}</p>
+                          <p className="text-xs text-text-muted truncate">Facebook Page</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDisconnectAccount(acc)}
+                        className="w-[96px] min-h-[44px] rounded-xl chip-danger border text-xs font-medium hover:opacity-85 active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  ))}
                   <button
                     onClick={() => handleConnectProvider('facebook')}
-                    className="w-[96px] min-h-[40px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
+                    className="w-full min-h-[44px] mt-1 mb-2 py-2 px-3 rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-sm font-medium text-text-main flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                  >
+                    <Plus size={15} />
+                    <span>Connect Another Facebook Page</span>
+                  </button>
+                </>
+              ) : (
+                <div className="py-3 flex items-center justify-between gap-3 text-sm">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <AccountAvatar fallback={<FacebookIcon />} />
+                    <div className="min-w-0">
+                      <p className="font-medium text-text-main truncate">Facebook Pages</p>
+                      <p className="text-xs text-text-muted truncate">Not connected</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleConnectProvider('facebook')}
+                    className="w-[96px] min-h-[44px] rounded-xl bg-surface-2 hover:bg-surface-3 border border-border text-xs font-medium text-text-secondary hover:text-text-main active:scale-[0.98] transition-all flex items-center justify-center shrink-0"
                   >
                     Connect
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* LinkedIn */}
               <div className="py-3 flex items-center justify-between gap-3 text-sm">

@@ -76,7 +76,7 @@ def _youtube_service(publication: Dict[str, Any]):
             return None
         try:
             from dispatch.youtube_connections import get_account_credentials
-            credentials = get_account_credentials(account_id, user_id=user_id, timeout_seconds=5.0)
+            credentials = get_account_credentials(account_id, user_id=user_id, timeout_seconds=5.0, provider="youtube")
         except Exception as exc:
             logger.debug("Stats credential lookup failed for publication %s: %s", publication.get("id"), exc)
         if not credentials:

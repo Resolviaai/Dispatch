@@ -88,26 +88,133 @@ async function aesKey(vaultKey: string): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
-/** AES-256-GCM; output = base64url(iv || ciphertext). */
-export async function encryptToken(vaultKeyB64: string, plaintext: string): Promise<string> {
+export interface VaultDecryptResult {
+  plaintext: string;
+  version: 1 | 2;
+  needsMigration: boolean;
+}
+
+const VAULT_ENCODER = new TextEncoder();
+const VAULT_DECODER = new TextDecoder();
+
+/** Canonical Additional Authenticated Data (AAD) for vault_v: 2 ciphertexts. */
+export function buildVaultAad(userId: string, provider: string, accountId: string): string {
+  const u = String(userId || "").trim();
+  const p = String(provider || "").trim().toLowerCase();
+  const a = String(accountId || "").trim();
+  if (!u || !p || !a) {
+    throw new Error("Vault AAD requires non-empty userId, provider, and accountId");
+  }
+  return `${u}|${p}|${a}`;
+}
+
+/** AES-256-GCM v2 envelope bound to AAD (`${user_id}|${provider}|${account_id}`). */
+export async function encryptTokenV2(
+  vaultKeyB64: string,
+  plaintext: string,
+  aad: string,
+): Promise<string> {
+  if (!aad || !aad.trim()) {
+    throw new Error("encryptTokenV2 requires non-empty AAD");
+  }
+  const key = await aesKey(vaultKeyB64);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: VAULT_ENCODER.encode(aad) },
+    key,
+    VAULT_ENCODER.encode(plaintext),
+  );
+  return JSON.stringify({
+    vault_v: 2,
+    iv: b64url(iv),
+    ct: b64url(new Uint8Array(ct)),
+  });
+}
+
+/** AES-256-GCM; uses vault_v: 2 when AAD is supplied, legacy v1 otherwise. */
+export async function encryptToken(
+  vaultKeyB64: string,
+  plaintext: string,
+  aad?: string,
+): Promise<string> {
+  if (typeof aad === "string" && aad.trim()) {
+    return encryptTokenV2(vaultKeyB64, plaintext, aad);
+  }
   const key = await aesKey(vaultKeyB64);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    new TextEncoder().encode(plaintext)
+    VAULT_ENCODER.encode(plaintext),
   );
   return b64url(new Uint8Array([...iv, ...new Uint8Array(ct)]));
 }
 
-/** AES-256-GCM decrypt. */
-export async function decryptToken(vaultKeyB64: string, ciphertextB64url: string): Promise<string> {
+/**
+ * Dual-read AES-256-GCM decryptor.
+ * - `vault_v: 2` envelopes strictly require matching non-empty `expectedAad` (no downgrade).
+ * - Legacy v1 payloads decrypt without AAD and signal `needsMigration: true` when `expectedAad` is supplied.
+ */
+export async function decryptTokenWithMigration(
+  vaultKeyB64: string,
+  ciphertext: string,
+  expectedAad?: string,
+): Promise<VaultDecryptResult> {
+  const raw = String(ciphertext || "").trim();
+  if (!raw) {
+    throw new Error("Empty vault ciphertext");
+  }
   const key = await aesKey(vaultKeyB64);
-  const data = fromB64url(ciphertextB64url);
+
+  if (raw.startsWith("{")) {
+    let parsed: { vault_v?: unknown; iv?: unknown; ct?: unknown };
+    try {
+      parsed = JSON.parse(raw) as { vault_v?: unknown; iv?: unknown; ct?: unknown };
+    } catch {
+      throw new Error("Malformed vault envelope");
+    }
+    if (parsed.vault_v !== 2 || typeof parsed.iv !== "string" || typeof parsed.ct !== "string") {
+      throw new Error(`Unsupported vault envelope version: ${String(parsed.vault_v)}`);
+    }
+    if (!expectedAad || !expectedAad.trim()) {
+      throw new Error("Missing required AAD for vault_v: 2 decryption");
+    }
+    const iv = fromB64url(parsed.iv);
+    const ct = fromB64url(parsed.ct);
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, additionalData: VAULT_ENCODER.encode(expectedAad) },
+      key,
+      ct,
+    );
+    return {
+      plaintext: VAULT_DECODER.decode(pt),
+      version: 2,
+      needsMigration: false,
+    };
+  }
+
+  const data = fromB64url(raw);
+  if (data.length <= 12) {
+    throw new Error("Invalid legacy vault ciphertext");
+  }
   const iv = data.slice(0, 12);
   const ct = data.slice(12);
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-  return new TextDecoder().decode(pt);
+  return {
+    plaintext: VAULT_DECODER.decode(pt),
+    version: 1,
+    needsMigration: Boolean(expectedAad && expectedAad.trim()),
+  };
+}
+
+/** AES-256-GCM decrypt (enforces expectedAad for vault_v: 2 envelopes). */
+export async function decryptToken(
+  vaultKeyB64: string,
+  ciphertextB64url: string,
+  expectedAad?: string,
+): Promise<string> {
+  const res = await decryptTokenWithMigration(vaultKeyB64, ciphertextB64url, expectedAad);
+  return res.plaintext;
 }
 
 export async function sha256B64Url(str: string): Promise<string> {
@@ -223,6 +330,9 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
   const directDispatchUrl = `dispatch://oauth/callback?${qParams}`;
   const intentDispatchUrl = `intent://oauth/callback?${qParams}#Intent;scheme=dispatch;package=com.resolvia.dispatch;end`;
 
+  const directDispatchJs = JSON.stringify(directDispatchUrl).replace(/</g, "\\u003c");
+  const intentDispatchJs = JSON.stringify(intentDispatchUrl).replace(/</g, "\\u003c");
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -296,10 +406,10 @@ export function renderOAuthResultHtml(title: string, message: string, isError = 
     (function() {
       setTimeout(function() {
         try {
-          window.location.href = "${directDispatchUrl}";
+          window.location.href = ${directDispatchJs};
         } catch (e) {
           try {
-            window.location.href = "${intentDispatchUrl}";
+            window.location.href = ${intentDispatchJs};
           } catch (_) {}
         }
       }, 700);

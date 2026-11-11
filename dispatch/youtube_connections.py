@@ -1,25 +1,63 @@
-"""Per-user YouTube token vault (PC side) and remote job queue client.
+"""Cloud Worker broker client and remote job queue client for the owner PC.
 
-The Android app performs on-device Google sign-in; the Cloudflare Worker exchanges
-the code and stores the refresh token ENCRYPTED (AES-256-GCM, base64url(iv||ct))
-in Supabase youtube_connections using TOKEN_VAULT_KEY. The PC decrypts with the
-same key when processing that user's videos. The key never leaves the two
-server-side components (Worker secret + PC env).
+Security boundary (Wave 0):
+- Cloudflare Worker is the sole owner of SUPABASE_SERVICE_ROLE_KEY,
+  DISPATCH_TOKEN_VAULT_KEY, YOUTUBE_CLIENT_SECRET, raw OAuth refresh_tokens,
+  and raw user Gemini BYOK API keys.
+- The PC authenticates exclusively with DISPATCH_WORKER_TOKEN + X-Dispatch-User-Id
+  to scoped `/sync/pc/*` Worker broker routes and receives ONLY short-lived
+  provider access_tokens or proxied API outputs.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
+import tempfile
+import threading
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("dispatch.youtube_connections")
+_TOKEN_FILE_LOCK = threading.Lock()
+
+
+def atomic_write_token_file(token_file: Path, content: str) -> None:
+    """Thread-safe atomic token JSON write (shared lock across publisher & inbox OAuth)."""
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    with _TOKEN_FILE_LOCK:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(token_file.parent),
+            prefix=f".{token_file.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_f:
+                tmp_f.write(content)
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_name, str(token_file))
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 class VaultUnavailable(Exception):
-    """Cloud/Supabase unreachable or misconfigured; caller must fail closed."""
+    """Cloud Worker broker unreachable or misconfigured; caller must fail closed."""
 
 
 try:
@@ -31,6 +69,129 @@ except Exception:
 
 def _env(name: str) -> str:
     return os.getenv(name, "").strip()
+
+
+def _is_standalone_mode() -> bool:
+    return (
+        _env("DISPATCH_STANDALONE").lower() in ("1", "true", "yes")
+        or _env("DISPATCH_OFFLINE_MODE").lower() in ("1", "true", "yes")
+    )
+
+
+def _worker_config() -> tuple[str, str]:
+    worker_url = (_env("DISPATCH_WORKER_URL") or _env("DISPATCH_CLOUD_WORKER_URL")).rstrip("/")
+    worker_token = _env("DISPATCH_WORKER_TOKEN")
+    return worker_url, worker_token
+
+
+def _resolve_default_user_id(user_id: Optional[str] = None) -> Optional[str]:
+    uid = (user_id or _env("DISPATCH_USER_ID")).strip()
+    if uid:
+        return uid
+    try:
+        from dispatch.cloud.sync import authorized_pc_owner_ids
+        owners = authorized_pc_owner_ids()
+        if len(owners) == 1:
+            return owners[0]
+    except Exception:
+        pass
+    return None
+
+
+def _worker_headers(user_id: Optional[str] = None) -> Dict[str, str]:
+    _, worker_token = _worker_config()
+    headers = {
+        "Authorization": f"Bearer {worker_token}",
+        "Content-Type": "application/json",
+    }
+    resolved_uid = _resolve_default_user_id(user_id)
+    if resolved_uid:
+        headers["X-Dispatch-User-Id"] = resolved_uid
+    return headers
+
+
+def _worker_post(
+    path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    timeout_seconds: float = 20.0,
+) -> tuple[int, Dict[str, Any]]:
+    import httpx
+
+    worker_url, worker_token = _worker_config()
+    if not worker_url or not worker_token:
+        raise VaultUnavailable(
+            "Cloud worker broker not configured (missing DISPATCH_WORKER_URL or DISPATCH_WORKER_TOKEN)"
+        )
+    resp = httpx.post(
+        f"{worker_url}{path}",
+        json=payload if payload is not None else {},
+        headers=_worker_headers(user_id),
+        timeout=timeout_seconds,
+    )
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"error": resp.text[:200]}
+    if not isinstance(data, dict):
+        data = {"result": data}
+    return resp.status_code, data
+
+
+def _worker_get(
+    path: str,
+    user_id: Optional[str] = None,
+    params: Optional[Dict[str, str]] = None,
+    timeout_seconds: float = 20.0,
+) -> tuple[int, Dict[str, Any]]:
+    import httpx
+
+    worker_url, worker_token = _worker_config()
+    if not worker_url or not worker_token:
+        raise VaultUnavailable(
+            "Cloud worker broker not configured (missing DISPATCH_WORKER_URL or DISPATCH_WORKER_TOKEN)"
+        )
+    resp = httpx.get(
+        f"{worker_url}{path}",
+        params=params,
+        headers=_worker_headers(user_id),
+        timeout=timeout_seconds,
+    )
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"error": resp.text[:200]}
+    if not isinstance(data, dict):
+        data = {"result": data}
+    return resp.status_code, data
+
+
+def _worker_delete(
+    path: str,
+    user_id: Optional[str] = None,
+    params: Optional[Dict[str, str]] = None,
+    timeout_seconds: float = 20.0,
+) -> tuple[int, Dict[str, Any]]:
+    import httpx
+
+    worker_url, worker_token = _worker_config()
+    if not worker_url or not worker_token:
+        raise VaultUnavailable(
+            "Cloud worker broker not configured (missing DISPATCH_WORKER_URL or DISPATCH_WORKER_TOKEN)"
+        )
+    resp = httpx.delete(
+        f"{worker_url}{path}",
+        params=params,
+        headers=_worker_headers(user_id),
+        timeout=timeout_seconds,
+    )
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"error": resp.text[:200]}
+    if not isinstance(data, dict):
+        data = {"result": data}
+    return resp.status_code, data
 
 
 def get_candidate_vault_keys() -> List[bytes]:
@@ -110,76 +271,283 @@ def decrypt_refresh_token(encrypted_b64url: str) -> str:
     raise ValueError("No vault keys available")
 
 
-def _supabase_rpc(action: str, params: Dict[str, Any], timeout_seconds: float = 20.0) -> Any:
-    """Service-role RPC against the linked Supabase project. Never logs params."""
-    import httpx
-
-    url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-    if not url or not key:
-        raise VaultUnavailable("Supabase not configured on the PC")
-    resp = httpx.post(f"{url}/rest/v1/rpc/{action}", json=params,
-                      headers={"apikey": key, "Authorization": f"Bearer {key}",
-                               "Content-Type": "application/json"}, timeout=timeout_seconds)
-    if resp.status_code not in (200, 204):
-        raise VaultUnavailable(f"Supabase RPC {action} failed: {resp.status_code}")
-    if resp.status_code == 204 or not resp.content:
-        return None
-    return resp.json()
-
-
 def get_user_refresh_token(user_id: str) -> str:
-    """Decrypt and return the given user's YouTube refresh token, or '' if none."""
-    rows = _supabase_rpc("cloud_get_refresh_token", {"p_user_id": user_id})
-    token = rows[0]["cloud_get_refresh_token"] if isinstance(rows, list) else rows
-    if not token:
-        return ""
-    return decrypt_refresh_token(token)
+    """Fail-closed stub: raw OAuth refresh tokens never leave the Cloud Worker."""
+    if user_id:
+        logger.debug("Refusing raw refresh_token export on PC for user %s; use Worker access-token broker.", user_id)
+    return ""
 
 
 def disconnect_user_token(user_id: str) -> None:
-    """Remove a user's stored YouTube credential (reconnect re-runs on-device sign-in)."""
-    _supabase_rpc("cloud_delete_refresh_token", {"p_user_id": user_id})
+    """Remove a user's stored YouTube credential via the scoped Worker broker."""
+    if not user_id:
+        return
+    status, data = _worker_post("/sync/pc/disconnect", {}, user_id=user_id, timeout_seconds=20.0)
+    if status >= 400:
+        raise VaultUnavailable(f"Worker disconnect failed ({status}): {data.get('error', '')}")
 
 
 def get_user_gemini_key(user_id: Optional[str] = None) -> str:
-    """Decrypt and return the given user's vaulted Gemini API key, or '' if none."""
-    if not user_id:
-        return ""
+    """Fail-closed compatibility symbol: user Gemini BYOK keys remain sealed in Cloud Worker."""
+    if user_id:
+        logger.debug("User Gemini BYOK keys are restricted to Cloud Worker proxy (user=%s).", user_id)
+    return ""
+
+
+def has_user_gemini_proxy(user_id: Optional[str] = None, timeout_seconds: float = 10.0) -> bool:
+    """Return True if the Cloud Worker has a vaulted Gemini BYOK key for user_id."""
+    uid = _resolve_default_user_id(user_id)
+    if not uid:
+        return False
     try:
-        rows = _supabase_rpc("cloud_get_gemini_key", {"p_user_id": user_id})
-        enc = rows[0]["cloud_get_gemini_key"] if isinstance(rows, list) and rows else rows
-        if not enc or not isinstance(enc, str):
-            return ""
-        return decrypt_refresh_token(enc)
+        status, data = _worker_get("/sync/pc/gemini/status", user_id=uid, timeout_seconds=timeout_seconds)
+        return status == 200 and bool(data.get("configured"))
     except Exception as e:
-        logger.debug("Could not retrieve vaulted Gemini key for user %s: %s", user_id, e)
-        return ""
+        logger.debug("Could not query Gemini proxy status for user %s: %s", uid, e)
+        return False
+
+
+def call_user_gemini_proxy(
+    user_id: str,
+    contents: Any,
+    model: str = "gemini-2.5-flash",
+    generation_config: Optional[Dict[str, Any]] = None,
+    system_instruction: Optional[Any] = None,
+    safety_settings: Optional[Any] = None,
+    tools: Optional[Any] = None,
+    timeout_seconds: float = 45.0,
+) -> Dict[str, Any]:
+    """Execute Gemini generateContent on Cloud Worker without exposing the user API key to PC."""
+    if not user_id:
+        raise ValueError("user_id is required for call_user_gemini_proxy")
+    payload: Dict[str, Any] = {"model": model, "contents": contents}
+    if generation_config is not None:
+        payload["generationConfig"] = generation_config
+    if system_instruction is not None:
+        payload["systemInstruction"] = system_instruction
+    if safety_settings is not None:
+        payload["safetySettings"] = safety_settings
+    if tools is not None:
+        payload["tools"] = tools
+
+    status, data = _worker_post(
+        "/sync/pc/gemini/generate",
+        payload,
+        user_id=user_id,
+        timeout_seconds=timeout_seconds,
+    )
+    if status == 404 or data.get("code") == "gemini_key_missing":
+        raise PermissionError("User Gemini API key is not configured in Dispatch Cloud Vault")
+    if status >= 400:
+        raise VaultUnavailable(f"Worker Gemini generate proxy failed ({status}): {data.get('error', '')}")
+    return data
+
+
+def upload_user_gemini_media(
+    user_id: str,
+    file_path: str,
+    mime_type: str = "video/mp4",
+    display_name: Optional[str] = None,
+    timeout_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    """Start a Gemini Files resumable upload via Worker and stream bytes directly to the session URL."""
+    import httpx
+
+    p = Path(file_path)
+    num_bytes = p.stat().st_size
+    status, init_data = _worker_post(
+        "/sync/pc/gemini/upload",
+        {
+            "mime_type": mime_type,
+            "num_bytes": num_bytes,
+            "display_name": display_name or p.name,
+        },
+        user_id=user_id,
+        timeout_seconds=20.0,
+    )
+    if status == 404 or init_data.get("code") == "gemini_key_missing":
+        raise PermissionError("User Gemini API key is not configured in Dispatch Cloud Vault")
+    if status >= 400 or not init_data.get("upload_url"):
+        raise VaultUnavailable(f"Worker Gemini upload init failed ({status}): {init_data.get('error', '')}")
+
+    upload_url = str(init_data["upload_url"])
+    with open(p, "rb") as f:
+        up_resp = httpx.post(
+            upload_url,
+            content=f.read(),
+            headers={
+                "Content-Length": str(num_bytes),
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+            timeout=timeout_seconds,
+        )
+    if up_resp.status_code not in (200, 201):
+        raise VaultUnavailable(f"Gemini resumable media upload failed ({up_resp.status_code})")
+    return up_resp.json() if up_resp.content else {}
+
+
+def _infer_provider_candidates(account_id: str, provider: Optional[str]) -> List[str]:
+    if provider:
+        norm = provider.strip().lower()
+        if norm in ("youtube", "youtube_shorts", "google"):
+            return ["youtube"]
+        if norm in ("x", "twitter"):
+            return ["twitter"]
+        return [norm]
+    ref = str(account_id).strip()
+    if ref.startswith("urn:li:"):
+        return ["linkedin"]
+    if ref.startswith("UC"):
+        return ["youtube"]
+    return ["youtube", "instagram", "facebook", "linkedin", "twitter"]
 
 
 def get_account_credentials(
     account_id: str,
     user_id: Optional[str] = None,
     timeout_seconds: float = 20.0,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Retrieve and decrypt credentials for a connected account.
-    Returns parsed credentials dict or empty dict if not found."""
-    if not account_id:
+    """Fetch a short-lived provider access token via the Cloud Worker broker.
+
+    Never returns raw refresh_tokens, OAuth client secrets, or vault keys.
+    Returns `{"needs_reauth": True, ...}` if the upstream provider revoked consent.
+    """
+    if not account_id and not user_id:
+        return {}
+    uid = _resolve_default_user_id(user_id)
+    if not uid:
+        return {}
+
+    candidates = _infer_provider_candidates(account_id or "", provider)
+    try:
+        for cand_provider in candidates:
+            status, data = _worker_post(
+                "/sync/pc/oauth/access-token",
+                {
+                    "provider": cand_provider,
+                    "account_id": str(account_id or ""),
+                    "require_source_vault": False,
+                },
+                user_id=uid,
+                timeout_seconds=timeout_seconds,
+            )
+            if status == 200 and data.get("access_token"):
+                # Defense-in-depth: never propagate long-lived refresh/client secrets.
+                out: Dict[str, Any] = {
+                    "access_token": data["access_token"],
+                    "token": data["access_token"],
+                    "expires_at": data.get("expires_at"),
+                    "ttl_seconds": data.get("ttl_seconds"),
+                    "provider": data.get("provider") or cand_provider,
+                    "account_id": data.get("account_id") or account_id,
+                    "account_name": data.get("account_name"),
+                    "account_email": data.get("account_email"),
+                    "needs_reauth": False,
+                }
+                for key in ("page_id", "ig_user_id", "author_urn", "api_base", "auth_mode", "username", "open_id"):
+                    if data.get(key) is not None:
+                        out[key] = data[key]
+                return out
+            if data.get("code") == "needs_reauth" or data.get("needs_reauth") is True:
+                return {
+                    "needs_reauth": True,
+                    "code": "needs_reauth",
+                    "provider": cand_provider,
+                    "account_id": data.get("account_id") or account_id,
+                    "error": data.get("error") or f"{cand_provider} connection requires re-authentication",
+                }
+            if status != 404:
+                break
+        return {}
+    except Exception as e:
+        logger.debug("Could not broker short-lived access token for account %s: %s", account_id, e)
+        return {}
+
+
+def get_user_youtube_access_token(
+    user_id: str,
+    account_id: str = "",
+    timeout_seconds: float = 20.0,
+) -> Dict[str, Any]:
+    """Fetch user's short-lived YouTube access token (or needs_reauth dict) via Worker broker."""
+    if not user_id:
+        return {}
+    return get_account_credentials(
+        account_id=account_id,
+        user_id=user_id,
+        timeout_seconds=timeout_seconds,
+        provider="youtube",
+    )
+
+
+def reconcile_youtube_via_worker(
+    account_id: str,
+    idempotency_key: str,
+    user_id: Optional[str] = None,
+    timeout_seconds: float = 20.0,
+) -> Dict[str, Any]:
+    """Run YouTube Data API search reconciliation server-side via Cloud Worker."""
+    uid = _resolve_default_user_id(user_id)
+    if not uid:
+        return {"reconciled": False, "reason": "No target user_id available for YouTube reconciliation"}
+    try:
+        status, data = _worker_post(
+            "/sync/pc/youtube/reconcile",
+            {"account_id": account_id or "", "idempotency_key": idempotency_key, "max_results": 5},
+            user_id=uid,
+            timeout_seconds=timeout_seconds,
+        )
+        if data.get("needs_reauth") or data.get("code") == "needs_reauth":
+            raise PermissionError(str(data.get("error") or "YouTube authorization revoked; reconnect required"))
+        if status == 404:
+            return {"reconciled": False, "reason": "No connected YouTube account"}
+        if status >= 400:
+            return {"reconciled": False, "reason": f"Worker reconcile failed ({status}): {data.get('error', '')}"}
+        items = data.get("items") or []
+        if items:
+            first = items[0]
+            vid = first.get("id", {}).get("videoId") if isinstance(first.get("id"), dict) else first.get("videoId")
+            if vid:
+                return {
+                    "reconciled": True,
+                    "published": True,
+                    "remote_id": vid,
+                    "remote_url": f"https://www.youtube.com/watch?v={vid}",
+                }
+        return {"reconciled": True, "published": False}
+    except PermissionError:
+        raise
+    except Exception as e:
+        return {"reconciled": False, "reason": str(e)}
+
+
+def get_youtube_status_via_worker(
+    video_ids: List[str],
+    user_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    timeout_seconds: float = 20.0,
+) -> Dict[str, Dict[str, Any]]:
+    """Query YouTube video status/processingDetails via Cloud Worker without PC credentials."""
+    if not video_ids:
+        return {}
+    uid = _resolve_default_user_id(user_id)
+    if not uid:
         return {}
     try:
-        rows = _supabase_rpc("cloud_get_credentials_by_account_id", {
-            "p_account_id": str(account_id),
-            "p_user_id": user_id
-        }, timeout_seconds=timeout_seconds)
-        enc = rows[0]["cloud_get_credentials_by_account_id"] if isinstance(rows, list) and rows else rows
-        if not enc or not isinstance(enc, str):
+        status, data = _worker_post(
+            "/sync/pc/youtube/status",
+            {"account_id": account_id or "", "video_ids": list(video_ids)[:50]},
+            user_id=uid,
+            timeout_seconds=timeout_seconds,
+        )
+        if status != 200:
             return {}
-        decrypted = decrypt_refresh_token(enc)
-        import json
-        if decrypted.startswith("{"):
-            return json.loads(decrypted)
-        return {"refresh_token": decrypted}
+        videos = data.get("videos")
+        return videos if isinstance(videos, dict) else {}
     except Exception as e:
-        logger.debug("Could not retrieve credentials for account %s: %s", account_id, e)
+        logger.debug("Worker youtube status check failed: %s", e)
         return {}
 
 
@@ -202,12 +570,13 @@ class RemoteJob:
 
 
 def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
-    """Atomically claim the oldest queued remote job (single-worker alpha)."""
-    rows = _supabase_rpc("cloud_claim_job", {"p_worker_id": worker_id})
-    arr = rows if isinstance(rows, list) else []
-    if not arr:
+    """Atomically claim the oldest queued remote job via Cloud Worker broker."""
+    status, data = _worker_post("/sync/pc/remote-jobs/claim", {"worker_id": worker_id})
+    if status >= 400:
+        raise VaultUnavailable(f"Worker claim_remote_job failed ({status}): {data.get('error', '')}")
+    row = data.get("job")
+    if not row or not isinstance(row, dict) or not row.get("job_id"):
         return None
-    row = arr[0]
     return RemoteJob(
         row["job_id"],
         row["user_id"],
@@ -219,77 +588,55 @@ def claim_remote_job(worker_id: str) -> Optional[RemoteJob]:
 
 
 def update_remote_job_stage(job_id: str, stage: str, video_id: str = "", duration: Optional[float] = None) -> None:
-    """Report granular processing stage (downloading, transcribing, analyzing, rendering, ready) to Supabase."""
+    """Report granular processing stage via Cloud Worker broker."""
     if not job_id:
         return
     try:
-        import httpx
-        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-        if url and key:
-            payload: Dict[str, Any] = {"stage": stage, "last_error": f"stage:{stage}" if stage != "done" else ""}
-            if video_id:
-                payload["video_id"] = video_id
-            if duration is not None and duration > 0:
-                payload["duration"] = round(float(duration), 2)
-            httpx.patch(
-                f"{url}/rest/v1/processing_jobs?id=eq.{job_id}",
-                json=payload,
-                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                timeout=5.0
-            )
+        worker_url, worker_token = _worker_config()
+        if not worker_url or not worker_token:
+            return
+        _worker_post(
+            "/sync/pc/remote-jobs/stage",
+            {"job_id": job_id, "stage": stage, "video_id": video_id, "duration": duration},
+            timeout_seconds=8.0,
+        )
     except Exception as e:
         logger.debug("Failed to update remote job stage for %s: %s", job_id, e)
 
 
 def update_job_title_by_video_id(video_id: str, title: str) -> None:
-    """Report enriched AI title for a video ID back to matching cloud jobs."""
+    """Report enriched AI title for a video ID back to matching cloud jobs via Worker."""
     if not video_id or not title:
         return
     try:
-        import httpx
-        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-        if url and key:
-            httpx.patch(
-                f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}",
-                json={"source_title": title},
-                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                timeout=5.0
-            )
+        worker_url, worker_token = _worker_config()
+        if not worker_url or not worker_token:
+            return
+        _worker_post(
+            "/sync/pc/remote-jobs/title-by-video",
+            {"video_id": video_id, "title": title},
+            timeout_seconds=8.0,
+        )
     except Exception as e:
         logger.debug("Failed to update title by video_id %s: %s", video_id, e)
 
 
 def get_account_id_for_video(video_id: str, user_id: Optional[str] = None) -> Optional[str]:
-    """Look up bound account_id for a given YouTube video from processing_jobs or connected_accounts."""
+    """Look up bound account_id for a given YouTube video via Cloud Worker broker."""
     if not video_id:
         return None
     try:
-        import httpx
-        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-        if not url or not key:
+        worker_url, worker_token = _worker_config()
+        if not worker_url or not worker_token:
             return None
-        resp = httpx.get(
-            f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&select=user_id&limit=1",
-            headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            timeout=5.0
+        status, data = _worker_post(
+            "/sync/pc/remote-jobs/account-for-video",
+            {"video_id": video_id, "user_id": user_id},
+            user_id=user_id,
+            timeout_seconds=8.0,
         )
-        if resp.status_code == 200:
-            rows = resp.json()
-            if rows and isinstance(rows, list) and rows[0].get("account_id"):
-                return str(rows[0]["account_id"])
-            if not user_id and rows and isinstance(rows, list):
-                user_id = rows[0].get("user_id")
-
-        if user_id:
-            acc_resp = httpx.get(
-                f"{url}/rest/v1/connected_accounts?user_id=eq.{user_id}&provider=eq.youtube&select=id,account_id&limit=1",
-                headers={"apikey": key, "Authorization": f"Bearer {key}"},
-                timeout=5.0
-            )
-            if acc_resp.status_code == 200:
-                acc_rows = acc_resp.json()
-                if acc_rows and isinstance(acc_rows, list):
-                    return str(acc_rows[0].get("account_id") or acc_rows[0].get("id") or "")
+        if status == 200 and data.get("account_id"):
+            return str(data["account_id"])
     except Exception as e:
         logger.debug("Failed to query account_id for video %s: %s", video_id, e)
     return None
@@ -318,41 +665,21 @@ def get_cloud_connected_youtube_channel(
     user_id: Optional[str] = None,
     channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Look up bound YouTube account/channel from connected_accounts in Supabase.
-
-    Enforces strict Route A identity invariant:
-    1. Standalone Mode: If DISPATCH_STANDALONE or DISPATCH_OFFLINE_MODE is enabled,
-       allows local operation without cloud vault verification.
-    2. Cloud Configuration: If Supabase credentials are missing without standalone mode,
-       fails closed with status 'cloud_unavailable'.
-    3. User Resolution: Resolves against explicit user_id, DISPATCH_USER_ID, or
-       authorized_pc_owner_ids(). If multiple owners exist in DISPATCH_PC_OWNER_USER_IDS
-       without DISPATCH_USER_ID, returns 'ambiguous_owner' rather than picking owners[0].
-    4. Account Query: Queries connected_accounts with is_verified=eq.true.
-       HTTP errors, timeouts, or network failures return 'cloud_unavailable' (fail-closed).
-    5. Multi-Account Ambiguity: If multiple accounts exist for the user (or vault) without
-       an explicit DISPATCH_YOUTUBE_CHANNEL_ID/DISPATCH_YOUTUBE_ACCOUNT_ID matching exactly one,
-       returns 'ambiguous_owner'.
-    6. Legacy Account Detection: If the account_id is an email (contains '@') or UUID and
-       metadata lacks a valid channel ID, returns 'legacy_account_needs_reconnect' instead of
-       causing a misleading mismatch error.
-    """
-    standalone_flag = (
-        os.getenv("DISPATCH_STANDALONE", "").strip().lower() in ("1", "true", "yes")
-        or os.getenv("DISPATCH_OFFLINE_MODE", "").strip().lower() in ("1", "true", "yes")
-    )
-
-    url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-    if not url or not key:
+    """Look up bound YouTube account/channel via Cloud Worker broker (`/sync/pc/youtube/channel`)."""
+    standalone_flag = _is_standalone_mode()
+    worker_url, worker_token = _worker_config()
+    if not worker_url or not worker_token:
         if standalone_flag:
             return {"status": "standalone_mode", "matched": True}
         return {
             "status": "cloud_unavailable",
-            "error": "Cloud vault not configured (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY). Set credentials or enable DISPATCH_STANDALONE=1.",
+            "error": (
+                "Cloud worker broker not configured (missing DISPATCH_WORKER_URL or DISPATCH_WORKER_TOKEN). "
+                "Set credentials or enable DISPATCH_STANDALONE=1."
+            ),
         }
 
-    # Resolve target user_id
-    target_user_id = user_id or os.getenv("DISPATCH_USER_ID", "").strip() or None
+    target_user_id = (user_id or _env("DISPATCH_USER_ID")).strip() or None
     if not target_user_id:
         try:
             from dispatch.cloud.sync import authorized_pc_owner_ids
@@ -361,9 +688,9 @@ def get_cloud_connected_youtube_channel(
                 target_user_id = owners[0]
             elif len(owners) > 1:
                 logger.warning(
-                    "Multiple PC owners configured (%d owners found in DISPATCH_PC_OWNER_USER_IDS: %s). "
-                    "Cannot arbitrarily bind Route A to one user. Set DISPATCH_USER_ID to bind Route A.",
-                    len(owners), owners
+                    "Multiple PC owners configured (%d owners found in DISPATCH_PC_OWNER_USER_IDS). "
+                    "Set DISPATCH_USER_ID to explicitly select the Route A creator.",
+                    len(owners),
                 )
                 return {
                     "status": "ambiguous_owner",
@@ -377,60 +704,54 @@ def get_cloud_connected_youtube_channel(
         except Exception as e:
             logger.debug("Failed to inspect authorized_pc_owner_ids: %s", e)
 
-    # Check for explicit channel/account binding
+    if not target_user_id:
+        if standalone_flag:
+            return {"status": "standalone_mode", "matched": True}
+        return {
+            "status": "cloud_unavailable",
+            "error": "No target user_id resolved (set DISPATCH_USER_ID or single UUID in DISPATCH_PC_OWNER_USER_IDS).",
+        }
+
     explicit_channel = (
         channel_id
-        or os.getenv("DISPATCH_YOUTUBE_CHANNEL_ID", "").strip()
-        or os.getenv("DISPATCH_YOUTUBE_ACCOUNT_ID", "").strip()
+        or _env("DISPATCH_YOUTUBE_CHANNEL_ID")
+        or _env("DISPATCH_YOUTUBE_ACCOUNT_ID")
         or None
     )
 
     try:
         import httpx
-        if target_user_id:
-            query_url = (
-                f"{url}/rest/v1/connected_accounts?"
-                f"user_id=eq.{target_user_id}&provider=eq.youtube&is_verified=eq.true&"
-                f"select=id,account_id,account_name,user_id,account_email,metadata,is_verified&limit=10"
-            )
-        else:
-            query_url = (
-                f"{url}/rest/v1/connected_accounts?"
-                f"provider=eq.youtube&is_verified=eq.true&"
-                f"select=id,account_id,account_name,user_id,account_email,metadata,is_verified&limit=10"
-            )
-
-        resp = httpx.get(
-            query_url,
-            headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            timeout=5.0
+        status, data = _worker_post(
+            "/sync/pc/youtube/channel",
+            {"channel_id": explicit_channel},
+            user_id=target_user_id,
+            timeout_seconds=8.0,
         )
     except httpx.TimeoutException as e:
-        logger.error("Supabase YouTube account lookup timed out: %s", e)
-        return {"status": "cloud_unavailable", "error": f"Supabase lookup timed out: {e}"}
+        logger.error("Cloud Worker YouTube channel lookup timed out: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Worker lookup timed out: {e}"}
     except httpx.RequestError as e:
-        logger.error("Supabase YouTube account lookup request failed: %s", e)
-        return {"status": "cloud_unavailable", "error": f"Supabase request failed: {e}"}
+        logger.error("Cloud Worker YouTube channel lookup failed: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Worker request failed: {e}"}
     except Exception as e:
-        logger.error("Supabase YouTube account lookup unexpected error: %s", e)
-        return {"status": "cloud_unavailable", "error": f"Supabase lookup error: {e}"}
+        logger.error("Cloud Worker YouTube channel lookup error: %s", e)
+        return {"status": "cloud_unavailable", "error": f"Worker lookup error: {e}"}
 
-    if resp.status_code != 200:
-        logger.error("Supabase YouTube account lookup returned HTTP %d: %s", resp.status_code, resp.text[:200])
-        return {"status": "cloud_unavailable", "error": f"Supabase returned HTTP {resp.status_code}"}
+    if status != 200:
+        return {"status": "cloud_unavailable", "error": f"Cloud Worker returned HTTP {status}: {data.get('error', '')}"}
 
-    try:
-        rows = resp.json()
-    except Exception as e:
-        logger.error("Failed to parse JSON from Supabase YouTube account response: %s", e)
-        return {"status": "cloud_unavailable", "error": f"Invalid JSON response from Supabase: {e}"}
-
-    if not isinstance(rows, list):
-        return {"status": "cloud_unavailable", "error": "Invalid response format from Supabase"}
-
-    if len(rows) == 0:
+    w_status = data.get("status")
+    if w_status == "not_found":
         if standalone_flag:
             return {"status": "standalone_mode", "matched": True}
+        reason = data.get("reason")
+        if reason == "channel_not_connected_to_user" and explicit_channel:
+            return {
+                "status": "ambiguous_owner",
+                "account_count": 0,
+                "user_id": target_user_id,
+                "error": f"Explicit channel '{explicit_channel}' is not connected for user {target_user_id}.",
+            }
         return {
             "status": "no_cloud_account",
             "user_id": target_user_id,
@@ -440,113 +761,88 @@ def get_cloud_connected_youtube_channel(
             ),
         }
 
-    # If explicit_channel is configured, attempt to filter
-    if explicit_channel:
-        filtered = [
-            r for r in rows
-            if str(r.get("account_id") or "").strip() == explicit_channel
-            or (isinstance(r.get("metadata"), dict) and str(r.get("metadata", {}).get("channel_id") or "").strip() == explicit_channel)
-        ]
-        if len(filtered) == 1:
-            rows = filtered
-        elif len(filtered) > 1:
-            rows = filtered
-        else:
-            return {
-                "status": "ambiguous_owner",
-                "account_count": len(rows),
-                "accounts": [r.get("account_id") for r in rows],
-                "user_id": target_user_id,
-                "error": f"Explicit channel '{explicit_channel}' not found among {len(rows)} connected accounts.",
-            }
-
-    if len(rows) > 1:
-        if target_user_id:
-            msg = (
-                f"User {target_user_id} has {len(rows)} connected YouTube accounts. "
-                "Set DISPATCH_YOUTUBE_CHANNEL_ID or DISPATCH_YOUTUBE_ACCOUNT_ID to select the active channel."
-            )
-        else:
-            msg = (
-                f"Multiple YouTube accounts connected in cloud vault ({len(rows)} found). "
-                "Set DISPATCH_USER_ID or DISPATCH_PC_OWNER_USER_IDS to bind this PC to a specific creator."
-            )
-        logger.warning(msg)
+    if w_status == "ambiguous_owner":
+        channels = data.get("channels") or []
         return {
             "status": "ambiguous_owner",
-            "account_count": len(rows),
-            "accounts": [r.get("account_id") for r in rows],
+            "account_count": len(channels),
+            "accounts": [c.get("channel_id") for c in channels if isinstance(c, dict)],
             "user_id": target_user_id,
-            "error": msg,
+            "error": (
+                f"User {target_user_id} has {len(channels)} connected YouTube accounts. "
+                "Set DISPATCH_YOUTUBE_CHANNEL_ID or DISPATCH_YOUTUBE_ACCOUNT_ID to select the active channel."
+            ),
         }
 
-    # Exactly one connected account row
-    row = rows[0]
-    raw_acc_id = str(row.get("account_id") or "").strip()
-    acc_name = str(row.get("account_name") or "")
-    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-    row_user_id = str(row.get("user_id") or "")
-    db_id = str(row.get("id") or "")
-
-    # Reconcile channel identity
-    meta_channel_id = str(metadata.get("channel_id") or "").strip()
-    effective_channel_id = None
-
-    if is_valid_youtube_channel_id(raw_acc_id):
-        effective_channel_id = raw_acc_id
-    elif meta_channel_id and is_valid_youtube_channel_id(meta_channel_id):
-        effective_channel_id = meta_channel_id
-    else:
-        # Legacy account: account_id is an email address or UUID and metadata has no channel ID
-        is_email = "@" in raw_acc_id
-        err_msg = (
-            f"Cloud connected account '{acc_name}' has a legacy "
-            f"{'email' if is_email else 'UUID'} identifier ({raw_acc_id}) instead of a verified YouTube Channel ID. "
-            "Please reconnect your YouTube channel in Dispatch Settings."
-        )
-        logger.warning(err_msg)
+    if w_status in ("legacy_reauth_required", "needs_reauth"):
+        raw_acc_id = str(data.get("channel_id") or "")
+        legacy_type = str(data.get("legacy_id_type") or ("email" if "@" in raw_acc_id else "legacy"))
         return {
             "status": "legacy_account_needs_reconnect",
             "account_id": raw_acc_id,
-            "account_name": acc_name,
-            "user_id": row_user_id,
-            "id": db_id,
-            "error": err_msg,
+            "account_name": str(data.get("channel_title") or data.get("account_name") or ""),
+            "user_id": str(data.get("user_id") or target_user_id),
+            "id": str(data.get("row_id") or ""),
+            "needs_reauth": w_status == "needs_reauth",
+            "error": (
+                "YouTube account requires reconnection in Dispatch Settings."
+                if w_status == "needs_reauth"
+                else (
+                    f"Cloud connected account has a legacy {legacy_type} identifier ({raw_acc_id}) "
+                    "instead of a verified YouTube Channel ID. Please reconnect your YouTube channel in Dispatch Settings."
+                )
+            ),
         }
 
-    return {
-        "status": "ok",
-        "account_id": effective_channel_id,
-        "raw_account_id": raw_acc_id,
-        "account_name": acc_name,
-        "user_id": row_user_id,
-        "id": db_id,
-    }
+    if w_status == "connected":
+        chan_id = str(data.get("channel_id") or "").strip()
+        if not is_valid_youtube_channel_id(chan_id):
+            return {
+                "status": "legacy_account_needs_reconnect",
+                "account_id": chan_id,
+                "account_name": str(data.get("channel_title") or ""),
+                "user_id": str(data.get("user_id") or target_user_id),
+                "id": str(data.get("row_id") or ""),
+                "error": "Cloud Worker returned invalid YouTube Channel ID; please reconnect.",
+            }
+        return {
+            "status": "ok",
+            "account_id": chan_id,
+            "raw_account_id": chan_id,
+            "account_name": str(data.get("channel_title") or ""),
+            "user_id": str(data.get("user_id") or target_user_id),
+            "id": str(data.get("row_id") or ""),
+        }
+
+    return {"status": "cloud_unavailable", "error": f"Unexpected Worker channel status: {w_status}"}
 
 
 def update_job_stage_by_video_id(video_id: str, stage: str) -> None:
-    """Report downstream processing stage for a video ID back to any matching cloud jobs."""
-    if not video_id:
+    """Report downstream processing stage for a video ID via Cloud Worker broker."""
+    if not video_id or not stage:
         return
     try:
-        import httpx
-        url, key = _env("SUPABASE_URL"), _env("SUPABASE_SERVICE_ROLE_KEY")
-        if url and key:
-            payload: Dict[str, Any] = {"stage": stage, "last_error": f"stage:{stage}" if stage != "done" else ""}
-            httpx.patch(
-                f"{url}/rest/v1/processing_jobs?video_id=eq.{video_id}&status=neq.failed",
-                json=payload,
-                headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                timeout=5.0
-            )
+        worker_url, worker_token = _worker_config()
+        if not worker_url or not worker_token:
+            return
+        _worker_post(
+            "/sync/pc/remote-jobs/stage-by-video",
+            {"video_id": video_id, "stage": stage},
+            timeout_seconds=8.0,
+        )
     except Exception as e:
         logger.debug("Failed to update stage by video_id %s: %s", video_id, e)
 
 
 def finish_remote_job(job_id: str, status: str, video_id: str = "", error: str = "") -> None:
-    _supabase_rpc("cloud_finish_job", {
-        "p_job_id": job_id, "p_status": status, "p_video_id": video_id, "p_error": error,
-    })
+    if not job_id:
+        return
+    http_status, data = _worker_post(
+        "/sync/pc/remote-jobs/finish",
+        {"job_id": job_id, "status": status, "video_id": video_id, "error": error},
+    )
+    if http_status >= 400:
+        raise VaultUnavailable(f"Worker finish_remote_job failed ({http_status}): {data.get('error', '')}")
 
 
 class RemoteJobPoller:

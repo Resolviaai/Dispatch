@@ -9,6 +9,9 @@
  */
 import { AwsClient } from "aws4fetch";
 import {
+  buildVaultAad,
+  encryptTokenV2,
+  decryptTokenWithMigration,
   encryptToken,
   decryptToken,
   buildAuthorizeUrl,
@@ -328,130 +331,891 @@ async function selectOne<T>(env: Env, table: string, id: string, columns: string
   return ((await res.json()) as T[])[0] ?? null;
 }
 
-async function getUserYouTubeAccessToken(
-  env: Env,
-  accountId: string,
-  userId: string,
-  options: { requireSourceVault?: boolean } = {},
-): Promise<string | null> {
-  const accountRef = accountId.trim();
-  if (!accountRef) return null;
-  const accountUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountRef)) {
-    accountUrl.searchParams.set("id", `eq.${accountRef}`);
-  } else {
-    accountUrl.searchParams.set("account_id", `eq.${accountRef}`);
+export class ProviderAuthError extends Error {
+  readonly code: "not_connected" | "needs_reauth" | "ambiguous_owner" | "legacy_reauth_required" | "refresh_failed" | "vault_error";
+  readonly status: number;
+  readonly provider: string;
+  readonly accountId?: string;
+
+  constructor(
+    code: ProviderAuthError["code"],
+    status: number,
+    provider: string,
+    message: string,
+    accountId?: string,
+  ) {
+    super(message);
+    this.name = "ProviderAuthError";
+    this.code = code;
+    this.status = status;
+    this.provider = provider;
+    this.accountId = accountId;
   }
-  accountUrl.searchParams.set("user_id", `eq.${userId}`);
-  accountUrl.searchParams.set("provider", "eq.youtube");
-  accountUrl.searchParams.set("select", "credentials_encrypted,metadata,account_email,account_id");
-  let accountRes = await fetch(accountUrl, {
+}
+
+export interface ValidProviderTokenResult {
+  provider: "youtube" | "instagram" | "facebook" | "linkedin" | "twitter";
+  accountId: string;
+  rowId: string;
+  accountName: string | null;
+  accountEmail: string | null;
+  accessToken: string;
+  expiresAtMs: number | null;
+  expiresAtIso: string | null;
+  payload: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+interface ConnectedAccountRow {
+  id: string;
+  user_id?: string;
+  provider?: string;
+  account_id?: string;
+  account_name?: string | null;
+  account_email?: string | null;
+  credentials_encrypted?: string;
+  metadata?: Record<string, unknown> | null;
+  is_verified?: boolean | null;
+}
+
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60_000;
+const SHORT_LIVED_CACHE_CAP_MS = 10 * 60_000;
+const providerTokenCache = new Map<string, {
+  accessToken: string;
+  expiresAtMs: number;
+  payload: Record<string, unknown>;
+  accountId: string;
+  rowId: string;
+  accountName: string | null;
+  accountEmail: string | null;
+  metadata: Record<string, unknown>;
+}>();
+const inflightProviderRefreshes = new Map<string, Promise<ValidProviderTokenResult | null>>();
+
+export function clearProviderTokenCacheForTests(): void {
+  providerTokenCache.clear();
+  inflightProviderRefreshes.clear();
+}
+
+const pcBrokerRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+export function checkPcBrokerRateLimit(
+  bucketKey: string,
+  maxRequests = 120,
+  windowMs = 60_000,
+): { allowed: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  if (pcBrokerRateBuckets.size > 512) {
+    for (const [k, v] of pcBrokerRateBuckets.entries()) {
+      if (v.resetAt <= now) pcBrokerRateBuckets.delete(k);
+    }
+  }
+  const existing = pcBrokerRateBuckets.get(bucketKey);
+  if (!existing || existing.resetAt <= now) {
+    pcBrokerRateBuckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, retryAfterSeconds: Math.ceil(windowMs / 1000) };
+  }
+  if (existing.count >= maxRequests) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)),
+    };
+  }
+  existing.count += 1;
+  return {
+    allowed: true,
+    retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)),
+  };
+}
+
+export function resetPcBrokerRateLimitsForTests(): void {
+  pcBrokerRateBuckets.clear();
+}
+
+function normalizeOAuthProvider(raw: string): "youtube" | "instagram" | "facebook" | "linkedin" | "twitter" {
+  const p = String(raw || "").trim().toLowerCase();
+  if (p === "x" || p === "twitter") return "twitter";
+  if (p === "google" || p === "youtube") return "youtube";
+  if (p === "instagram" || p === "facebook" || p === "linkedin") return p;
+  throw new ProviderAuthError("not_connected", 400, p, `Unsupported provider: ${raw}`);
+}
+
+function parseProviderPayload(provider: string, raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch { /* fall through to bare string */ }
+  }
+  return provider === "youtube" ? { refresh_token: trimmed } : { access_token: trimmed };
+}
+
+async function casUpdateConnectedAccountCredentials(
+  env: Env,
+  row: ConnectedAccountRow,
+  expectedOldEncrypted: string,
+  newEncrypted: string,
+  extraFields: Record<string, unknown> = {},
+): Promise<{ updated: boolean; conflict: boolean }> {
+  const patchUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+  patchUrl.searchParams.set("id", `eq.${row.id}`);
+  patchUrl.searchParams.set("credentials_encrypted", `eq.${expectedOldEncrypted}`);
+  const res = await fetch(patchUrl.toString(), {
+    method: "PATCH",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify({ credentials_encrypted: newEncrypted, ...extraFields }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) return { updated: false, conflict: false };
+  const text = await res.text();
+  if (!text.trim()) {
+    return { updated: true, conflict: false };
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      if (parsed.length === 0) return { updated: false, conflict: true };
+      return { updated: true, conflict: false };
+    }
+  } catch { /* simple mock response */ }
+  return { updated: true, conflict: false };
+}
+
+async function markConnectedAccountNeedsReauth(
+  env: Env,
+  row: ConnectedAccountRow,
+  reason: string,
+): Promise<void> {
+  const nextMeta: Record<string, unknown> = {
+    ...(row.metadata || {}),
+    needs_reauth: true,
+    reauth_reason: reason.slice(0, 200),
+    reauth_marked_at: new Date().toISOString(),
+  };
+  await fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${encodeURIComponent(row.id)}`, {
+    method: "PATCH",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ metadata: nextMeta, is_verified: false }),
+    signal: AbortSignal.timeout(8000),
+  }).catch(() => null);
+}
+
+async function readConnectedAccountByRowId(
+  env: Env,
+  rowId: string,
+): Promise<ConnectedAccountRow | null> {
+  const url = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+  url.searchParams.set("id", `eq.${rowId}`);
+  url.searchParams.set(
+    "select",
+    "id,user_id,provider,account_id,account_name,account_email,credentials_encrypted,metadata,is_verified",
+  );
+  url.searchParams.set("limit", "1");
+  const res = await fetch(url.toString(), {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     },
     signal: AbortSignal.timeout(8000),
   });
-  if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
-  let rows = await accountRes.json() as Array<{
-    credentials_encrypted?: string;
-    metadata?: Record<string, unknown>;
-    account_email?: string | null;
-    account_id?: string;
-  }>;
-  // The PC outbox historically stores the account email as its publisher
-  // binding, so resolve that reference too without trusting it beyond this user.
-  if (rows.length === 0 && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountRef)) {
-    accountUrl.searchParams.delete("account_id");
-    accountUrl.searchParams.set("account_email", `eq.${accountRef}`);
-    accountRes = await fetch(accountUrl, {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!accountRes.ok) throw new Error(`YouTube account lookup failed: ${accountRes.status}`);
-    rows = await accountRes.json() as typeof rows;
-  }
-  // A reconnect replaces the connected-account row (and its UUID). Devices can
-  // still hold the previous id until the next session push. Recover only when
-  // the account is unambiguous; multiple channels must fail closed.
-  if (rows.length === 0) {
-    const fallbackUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
-    fallbackUrl.searchParams.set("user_id", `eq.${userId}`);
-    fallbackUrl.searchParams.set("provider", "eq.youtube");
-    fallbackUrl.searchParams.set("select", "credentials_encrypted,metadata,account_email,account_id");
-    fallbackUrl.searchParams.set("limit", "2");
-    const fallbackRes = await fetch(fallbackUrl, {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!fallbackRes.ok) throw new Error(`YouTube account lookup failed: ${fallbackRes.status}`);
-    const candidates = await fallbackRes.json() as typeof rows;
-    if (Array.isArray(candidates) && candidates.length === 1) {
-      rows = candidates;
+  if (!res.ok) return null;
+  const rows = (await res.json()) as ConnectedAccountRow[];
+  return rows[0] ?? null;
+}
+
+async function resolveConnectedAccountRow(
+  env: Env,
+  userId: string,
+  normProvider: "youtube" | "instagram" | "facebook" | "linkedin" | "twitter",
+  accountRefRaw: string,
+): Promise<ConnectedAccountRow | null> {
+  const selectCols = "id,user_id,provider,account_id,account_name,account_email,credentials_encrypted,metadata,is_verified";
+  const providerFilter = normProvider === "twitter" ? "in.(twitter,x)" : `eq.${normProvider}`;
+  const accountRef = accountRefRaw.trim();
+
+  if (accountRef) {
+    const url = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+    url.searchParams.set("user_id", `eq.${userId}`);
+    url.searchParams.set("provider", providerFilter);
+    url.searchParams.set("select", selectCols);
+    if (UUID_RE.test(accountRef)) {
+      url.searchParams.set("or", `(id.eq.${accountRef},account_id.eq.${accountRef})`);
+    } else {
+      url.searchParams.set("account_id", `eq.${accountRef}`);
     }
+    const res = await fetch(url.toString(), {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) throw new Error(`${normProvider} account lookup failed: ${res.status}`);
+    let rows = (await res.json()) as ConnectedAccountRow[];
+    if (rows.length === 0 && normProvider === "youtube" && !UUID_RE.test(accountRef)) {
+      url.searchParams.delete("account_id");
+      url.searchParams.set("account_email", `eq.${accountRef}`);
+      const emailRes = await fetch(url.toString(), {
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!emailRes.ok) throw new Error(`youtube account lookup failed: ${emailRes.status}`);
+      rows = (await emailRes.json()) as ConnectedAccountRow[];
+    }
+    return rows.length > 0 ? rows[0] : null;
   }
-  const account = rows[0];
-  const requireSourceVault = options.requireSourceVault !== false;
-  if (!account?.credentials_encrypted || (requireSourceVault && account.metadata?.is_source_vault === false)) return null;
 
-  const stored = await decryptToken(env.TOKEN_VAULT_KEY, account.credentials_encrypted);
-  let refreshToken = stored.trim();
-  try {
-    const parsed = JSON.parse(stored) as { refresh_token?: unknown; token?: unknown };
-    refreshToken = typeof parsed.refresh_token === "string" ? parsed.refresh_token :
-      typeof parsed.token === "string" ? parsed.token : "";
-  } catch { /* OAuth callback stores a bare refresh-token string. */ }
-  if (!refreshToken) return null;
-
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.YOUTUBE_CLIENT_ID,
-      client_secret: env.YOUTUBE_CLIENT_SECRET,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
+  // Fallback ONLY when no explicit account_id was requested (default/unambiguous single account).
+  const fallbackUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+  fallbackUrl.searchParams.set("user_id", `eq.${userId}`);
+  fallbackUrl.searchParams.set("provider", providerFilter);
+  fallbackUrl.searchParams.set("select", selectCols);
+  fallbackUrl.searchParams.set("limit", "2");
+  const fallbackRes = await fetch(fallbackUrl.toString(), {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
     signal: AbortSignal.timeout(8000),
   });
-  if (!tokenRes.ok) return null;
-  const tokenBody = await tokenRes.json() as { access_token?: unknown };
-  return typeof tokenBody.access_token === "string" ? tokenBody.access_token : null;
+  if (!fallbackRes.ok) throw new Error(`${normProvider} account lookup failed: ${fallbackRes.status}`);
+  const candidates = (await fallbackRes.json()) as ConnectedAccountRow[];
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  throw new ProviderAuthError(
+    "ambiguous_owner",
+    409,
+    normProvider,
+    `Multiple ${normProvider} accounts exist; explicit account_id is required`,
+  );
+}
+
+/**
+ * Centralized credential decryptor, AES-GCM v2 AAD migrator, short-lived
+ * cache, single-flight refresh coordinator, and atomic CAS writer across all
+ * connected social providers.
+ */
+export async function getValidProviderToken(
+  env: Env,
+  params: {
+    userId: string;
+    provider: string;
+    accountId?: string | null;
+    forceRefresh?: boolean;
+    requireSourceVault?: boolean;
+  },
+): Promise<ValidProviderTokenResult | null> {
+  const normProvider = normalizeOAuthProvider(params.provider);
+  const account = await resolveConnectedAccountRow(
+    env,
+    params.userId,
+    normProvider,
+    String(params.accountId || ""),
+  );
+  if (!account || !account.credentials_encrypted) return null;
+
+  const meta = (account.metadata && typeof account.metadata === "object" ? account.metadata : {}) as Record<string, unknown>;
+  const requireSourceVault = params.requireSourceVault !== false;
+  if (requireSourceVault && normProvider === "youtube" && meta.is_source_vault === false) {
+    return null;
+  }
+  if (meta.needs_reauth === true) {
+    throw new ProviderAuthError(
+      "needs_reauth",
+      401,
+      normProvider,
+      `${normProvider} connection requires re-authentication`,
+      account.account_id || account.id,
+    );
+  }
+
+  const resolvedAccountId = String(account.account_id || account.id);
+  const cacheKey = `${params.userId}:${normProvider}:${account.id}`;
+  const now = Date.now();
+  if (!params.forceRefresh) {
+    const cached = providerTokenCache.get(cacheKey);
+    if (cached && cached.expiresAtMs - now > TOKEN_REFRESH_MARGIN_MS) {
+      return {
+        provider: normProvider,
+        accountId: cached.accountId,
+        rowId: cached.rowId,
+        accountName: cached.accountName,
+        accountEmail: cached.accountEmail,
+        accessToken: cached.accessToken,
+        expiresAtMs: cached.expiresAtMs,
+        expiresAtIso: new Date(cached.expiresAtMs).toISOString(),
+        payload: cached.payload,
+        metadata: cached.metadata,
+      };
+    }
+  }
+
+  const aad = buildVaultAad(params.userId, normProvider, resolvedAccountId);
+  let decryptRes;
+  try {
+    decryptRes = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, account.credentials_encrypted, aad);
+  } catch (err) {
+    throw new ProviderAuthError(
+      "vault_error",
+      500,
+      normProvider,
+      `Vault decryption failed: ${err instanceof Error ? err.message : String(err)}`,
+      resolvedAccountId,
+    );
+  }
+
+  const credPayload = parseProviderPayload(normProvider, decryptRes.plaintext);
+  const existingAccess =
+    typeof credPayload.access_token === "string" && credPayload.access_token
+      ? credPayload.access_token
+      : (typeof credPayload.bearer_token === "string" && credPayload.bearer_token
+        ? credPayload.bearer_token
+        : (normProvider === "facebook" && typeof credPayload.user_access_token === "string"
+          ? credPayload.user_access_token
+          : ""));
+
+  const parsedExpiry = typeof credPayload.token_expires_at === "string"
+    ? Date.parse(credPayload.token_expires_at)
+    : Number.NaN;
+  const hasValidExpiry = Number.isFinite(parsedExpiry) && parsedExpiry - now > TOKEN_REFRESH_MARGIN_MS;
+
+  // Non-expiring / still-fresh tokens: migrate legacy v1 -> v2 via CAS and return.
+  const canUseWithoutRefresh =
+    !params.forceRefresh &&
+    Boolean(existingAccess) &&
+    (
+      normProvider === "facebook"
+        ? (!Number.isFinite(parsedExpiry) || hasValidExpiry)
+        : (normProvider === "youtube" ? hasValidExpiry : (hasValidExpiry || (!Number.isFinite(parsedExpiry) && normProvider !== "twitter")))
+    );
+
+  if (canUseWithoutRefresh) {
+    if (decryptRes.needsMigration) {
+      const migratedEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload), aad);
+      await casUpdateConnectedAccountCredentials(env, account, account.credentials_encrypted, migratedEnc).catch(() => null);
+    }
+    const cacheExp = Number.isFinite(parsedExpiry)
+      ? Math.min(parsedExpiry, now + SHORT_LIVED_CACHE_CAP_MS)
+      : now + SHORT_LIVED_CACHE_CAP_MS;
+    providerTokenCache.set(cacheKey, {
+      accessToken: existingAccess,
+      expiresAtMs: cacheExp,
+      payload: credPayload,
+      accountId: resolvedAccountId,
+      rowId: account.id,
+      accountName: account.account_name ?? null,
+      accountEmail: account.account_email ?? null,
+      metadata: meta,
+    });
+    return {
+      provider: normProvider,
+      accountId: resolvedAccountId,
+      rowId: account.id,
+      accountName: account.account_name ?? null,
+      accountEmail: account.account_email ?? null,
+      accessToken: existingAccess,
+      expiresAtMs: Number.isFinite(parsedExpiry) ? parsedExpiry : cacheExp,
+      expiresAtIso: new Date(Number.isFinite(parsedExpiry) ? parsedExpiry : cacheExp).toISOString(),
+      payload: credPayload,
+      metadata: meta,
+    };
+  }
+
+  // Coalesce concurrent refreshes in this isolate.
+  const existingFlight = inflightProviderRefreshes.get(cacheKey);
+  if (existingFlight) return existingFlight;
+
+  const flight = (async (): Promise<ValidProviderTokenResult | null> => {
+    const oldEnc = account.credentials_encrypted!;
+
+    const handleCasConflictRecovery = async (): Promise<ValidProviderTokenResult | null> => {
+      const latest = await readConnectedAccountByRowId(env, account.id);
+      if (!latest?.credentials_encrypted || latest.credentials_encrypted === oldEnc) {
+        return null;
+      }
+      if (latest.metadata?.needs_reauth === true) {
+        throw new ProviderAuthError("needs_reauth", 401, normProvider, `${normProvider} connection requires re-authentication`, resolvedAccountId);
+      }
+      const latestDec = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, latest.credentials_encrypted, aad);
+      const latestPayload = parseProviderPayload(normProvider, latestDec.plaintext);
+      const latestAccess =
+        typeof latestPayload.access_token === "string" && latestPayload.access_token
+          ? latestPayload.access_token
+          : (typeof latestPayload.bearer_token === "string" ? latestPayload.bearer_token : "");
+      if (!latestAccess) return null;
+      const latestExp = typeof latestPayload.token_expires_at === "string" ? Date.parse(latestPayload.token_expires_at) : Number.NaN;
+      const expMs = Number.isFinite(latestExp) ? latestExp : Date.now() + 50 * 60_000;
+      providerTokenCache.set(cacheKey, {
+        accessToken: latestAccess,
+        expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+        payload: latestPayload,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: latest.account_name ?? account.account_name ?? null,
+        accountEmail: latest.account_email ?? account.account_email ?? null,
+        metadata: (latest.metadata && typeof latest.metadata === "object" ? latest.metadata : meta) as Record<string, unknown>,
+      });
+      return {
+        provider: normProvider,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: latest.account_name ?? account.account_name ?? null,
+        accountEmail: latest.account_email ?? account.account_email ?? null,
+        accessToken: latestAccess,
+        expiresAtMs: expMs,
+        expiresAtIso: new Date(expMs).toISOString(),
+        payload: latestPayload,
+        metadata: (latest.metadata && typeof latest.metadata === "object" ? latest.metadata : meta) as Record<string, unknown>,
+      };
+    };
+
+    if (normProvider === "youtube") {
+      const refreshToken =
+        typeof credPayload.refresh_token === "string" && credPayload.refresh_token
+          ? credPayload.refresh_token
+          : (typeof credPayload.token === "string" ? credPayload.token : "");
+      if (!refreshToken) {
+        await markConnectedAccountNeedsReauth(env, account, "missing_refresh_token");
+        throw new ProviderAuthError("needs_reauth", 401, "youtube", "YouTube refresh token missing", resolvedAccountId);
+      }
+      const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: env.YOUTUBE_CLIENT_ID,
+          client_secret: env.YOUTUBE_CLIENT_SECRET,
+          refresh_token: refreshToken,
+          grant_type: "refresh_token",
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+        error?: string;
+        error_description?: string;
+      };
+      if (!tokenRes.ok || typeof tokenBody.access_token !== "string" || !tokenBody.access_token) {
+        if (tokenRes.status === 400 || tokenRes.status === 401 || tokenBody.error === "invalid_grant" || tokenBody.error === "unauthorized_client") {
+          const recovered = await handleCasConflictRecovery();
+          if (recovered) return recovered;
+          await markConnectedAccountNeedsReauth(env, account, tokenBody.error || `http_${tokenRes.status}`);
+          throw new ProviderAuthError("needs_reauth", 401, "youtube", `YouTube OAuth revoked or expired (${tokenBody.error || tokenRes.status})`, resolvedAccountId);
+        }
+        throw new ProviderAuthError("refresh_failed", 502, "youtube", `YouTube token refresh failed (${tokenRes.status})`, resolvedAccountId);
+      }
+      const expMs = Date.now() + (typeof tokenBody.expires_in === "number" ? tokenBody.expires_in : 3600) * 1000;
+      const updatedPayload: Record<string, unknown> = {
+        ...credPayload,
+        refresh_token: typeof tokenBody.refresh_token === "string" && tokenBody.refresh_token ? tokenBody.refresh_token : refreshToken,
+        access_token: tokenBody.access_token,
+        token_refreshed_at: new Date().toISOString(),
+        token_expires_at: new Date(expMs).toISOString(),
+      };
+      const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(updatedPayload), aad);
+      const cas = await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc);
+      if (cas.conflict) {
+        const recovered = await handleCasConflictRecovery();
+        if (recovered) return recovered;
+      }
+      providerTokenCache.set(cacheKey, {
+        accessToken: tokenBody.access_token,
+        expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+        payload: updatedPayload,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        metadata: meta,
+      });
+      return {
+        provider: "youtube",
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        accessToken: tokenBody.access_token,
+        expiresAtMs: expMs,
+        expiresAtIso: new Date(expMs).toISOString(),
+        payload: updatedPayload,
+        metadata: meta,
+      };
+    }
+
+    if (normProvider === "instagram") {
+      if (!existingAccess) {
+        await markConnectedAccountNeedsReauth(env, account, "missing_instagram_token");
+        throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram access token missing", resolvedAccountId);
+      }
+      if (credPayload.auth_mode !== "instagram_login") {
+        if (Number.isFinite(parsedExpiry) && parsedExpiry <= Date.now()) {
+          await markConnectedAccountNeedsReauth(env, account, "instagram_token_expired");
+          throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram token expired", resolvedAccountId);
+        }
+        const expMs = Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 30 * 24 * 60 * 60_000;
+        if (decryptRes.needsMigration) {
+          const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload), aad);
+          await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc).catch(() => null);
+        }
+        return {
+          provider: "instagram",
+          accountId: resolvedAccountId,
+          rowId: account.id,
+          accountName: account.account_name ?? null,
+          accountEmail: account.account_email ?? null,
+          accessToken: existingAccess,
+          expiresAtMs: expMs,
+          expiresAtIso: new Date(expMs).toISOString(),
+          payload: credPayload,
+          metadata: meta,
+        };
+      }
+      const refreshRes = await fetch("https://graph.instagram.com/refresh_access_token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "ig_refresh_token",
+          access_token: existingAccess,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const refreshed = (await refreshRes.json().catch(() => ({}))) as {
+        access_token?: string;
+        expires_in?: number;
+        error?: { code?: number; message?: string };
+      };
+      if (!refreshRes.ok || !refreshed.access_token) {
+        if (refreshRes.status === 400 || refreshRes.status === 401 || refreshed.error?.code === 190) {
+          const recovered = await handleCasConflictRecovery();
+          if (recovered) return recovered;
+          await markConnectedAccountNeedsReauth(env, account, refreshed.error?.message || `http_${refreshRes.status}`);
+          throw new ProviderAuthError("needs_reauth", 401, "instagram", "Instagram token expired or revoked; reconnect required", resolvedAccountId);
+        }
+        throw new ProviderAuthError("refresh_failed", 502, "instagram", `Instagram token refresh failed (${refreshRes.status})`, resolvedAccountId);
+      }
+      const expMs = Date.now() + (typeof refreshed.expires_in === "number" ? refreshed.expires_in : 5184000) * 1000;
+      const updatedPayload: Record<string, unknown> = {
+        ...credPayload,
+        access_token: refreshed.access_token,
+        token_refreshed_at: new Date().toISOString(),
+        token_expires_at: new Date(expMs).toISOString(),
+      };
+      const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(updatedPayload), aad);
+      const cas = await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc);
+      if (cas.conflict) {
+        const recovered = await handleCasConflictRecovery();
+        if (recovered) return recovered;
+      }
+      providerTokenCache.set(cacheKey, {
+        accessToken: refreshed.access_token,
+        expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+        payload: updatedPayload,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        metadata: meta,
+      });
+      return {
+        provider: "instagram",
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        accessToken: refreshed.access_token,
+        expiresAtMs: expMs,
+        expiresAtIso: new Date(expMs).toISOString(),
+        payload: updatedPayload,
+        metadata: meta,
+      };
+    }
+
+    if (normProvider === "facebook") {
+      if (!existingAccess) {
+        await markConnectedAccountNeedsReauth(env, account, "missing_facebook_token");
+        throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook token missing", resolvedAccountId);
+      }
+      if (Number.isFinite(parsedExpiry) && parsedExpiry <= Date.now()) {
+        await markConnectedAccountNeedsReauth(env, account, "facebook_token_expired");
+        throw new ProviderAuthError("needs_reauth", 401, "facebook", "Facebook token expired; reconnect required", resolvedAccountId);
+      }
+      if (decryptRes.needsMigration) {
+        const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload), aad);
+        await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc).catch(() => null);
+      }
+      const expMs = Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + SHORT_LIVED_CACHE_CAP_MS;
+      providerTokenCache.set(cacheKey, {
+        accessToken: existingAccess,
+        expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+        payload: credPayload,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        metadata: meta,
+      });
+      return {
+        provider: "facebook",
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        accessToken: existingAccess,
+        expiresAtMs: expMs,
+        expiresAtIso: new Date(expMs).toISOString(),
+        payload: credPayload,
+        metadata: meta,
+      };
+    }
+
+    if (normProvider === "linkedin") {
+      const refreshToken = typeof credPayload.refresh_token === "string" ? credPayload.refresh_token : "";
+      if (!refreshToken) {
+        if (!existingAccess || (Number.isFinite(parsedExpiry) && parsedExpiry <= Date.now())) {
+          await markConnectedAccountNeedsReauth(env, account, "linkedin_token_expired_no_refresh");
+          throw new ProviderAuthError("needs_reauth", 401, "linkedin", "LinkedIn token expired; reconnect required", resolvedAccountId);
+        }
+        const expMs = Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + SHORT_LIVED_CACHE_CAP_MS;
+        return {
+          provider: "linkedin",
+          accountId: resolvedAccountId,
+          rowId: account.id,
+          accountName: account.account_name ?? null,
+          accountEmail: account.account_email ?? null,
+          accessToken: existingAccess,
+          expiresAtMs: expMs,
+          expiresAtIso: new Date(expMs).toISOString(),
+          payload: credPayload,
+          metadata: meta,
+        };
+      }
+      const tokRes = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: env.LINKEDIN_CLIENT_ID || "",
+          client_secret: env.LINKEDIN_CLIENT_SECRET || "",
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const tok = (await tokRes.json().catch(() => ({}))) as {
+        access_token?: string;
+        refresh_token?: string;
+        expires_in?: number;
+        error?: string;
+      };
+      if (!tokRes.ok || !tok.access_token) {
+        if (tokRes.status === 400 || tokRes.status === 401 || tok.error === "invalid_grant") {
+          const recovered = await handleCasConflictRecovery();
+          if (recovered) return recovered;
+          await markConnectedAccountNeedsReauth(env, account, tok.error || `http_${tokRes.status}`);
+          throw new ProviderAuthError("needs_reauth", 401, "linkedin", "LinkedIn refresh token invalid or revoked", resolvedAccountId);
+        }
+        throw new ProviderAuthError("refresh_failed", 502, "linkedin", `LinkedIn token refresh failed (${tokRes.status})`, resolvedAccountId);
+      }
+      const expMs = Date.now() + (typeof tok.expires_in === "number" ? tok.expires_in : 5184000) * 1000;
+      const updatedPayload: Record<string, unknown> = {
+        ...credPayload,
+        access_token: tok.access_token,
+        refresh_token: typeof tok.refresh_token === "string" && tok.refresh_token ? tok.refresh_token : refreshToken,
+        token_refreshed_at: new Date().toISOString(),
+        token_expires_at: new Date(expMs).toISOString(),
+      };
+      const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(updatedPayload), aad);
+      const cas = await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc);
+      if (cas.conflict) {
+        const recovered = await handleCasConflictRecovery();
+        if (recovered) return recovered;
+      }
+      providerTokenCache.set(cacheKey, {
+        accessToken: tok.access_token,
+        expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+        payload: updatedPayload,
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        metadata: meta,
+      });
+      return {
+        provider: "linkedin",
+        accountId: resolvedAccountId,
+        rowId: account.id,
+        accountName: account.account_name ?? null,
+        accountEmail: account.account_email ?? null,
+        accessToken: tok.access_token,
+        expiresAtMs: expMs,
+        expiresAtIso: new Date(expMs).toISOString(),
+        payload: updatedPayload,
+        metadata: meta,
+      };
+    }
+
+    // Twitter / X OAuth 2.0 (rotating single-use refresh_token protected by CAS)
+    const refreshToken = typeof credPayload.refresh_token === "string" ? credPayload.refresh_token : "";
+    if (!refreshToken) {
+      if (existingAccess && (!Number.isFinite(parsedExpiry) || parsedExpiry > Date.now())) {
+        if (decryptRes.needsMigration) {
+          const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload), aad);
+          await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc).catch(() => null);
+        }
+        const expMs = Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + SHORT_LIVED_CACHE_CAP_MS;
+        return {
+          provider: "twitter",
+          accountId: resolvedAccountId,
+          rowId: account.id,
+          accountName: account.account_name ?? null,
+          accountEmail: account.account_email ?? null,
+          accessToken: existingAccess,
+          expiresAtMs: expMs,
+          expiresAtIso: new Date(expMs).toISOString(),
+          payload: credPayload,
+          metadata: meta,
+        };
+      }
+      await markConnectedAccountNeedsReauth(env, account, "twitter_missing_refresh_token");
+      throw new ProviderAuthError("needs_reauth", 401, "twitter", "X (Twitter) refresh token missing; reconnect required", resolvedAccountId);
+    }
+
+    const basicAuth = btoa(`${env.TWITTER_CLIENT_ID || ""}:${env.TWITTER_CLIENT_SECRET || ""}`);
+    const twRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: env.TWITTER_CLIENT_ID || "",
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const twTok = (await twRes.json().catch(() => ({}))) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      error?: string;
+    };
+    if (!twRes.ok || !twTok.access_token) {
+      if (twRes.status === 400 || twRes.status === 401 || twTok.error === "invalid_grant") {
+        const recovered = await handleCasConflictRecovery();
+        if (recovered) return recovered;
+        await markConnectedAccountNeedsReauth(env, account, twTok.error || `http_${twRes.status}`);
+        throw new ProviderAuthError("needs_reauth", 401, "twitter", "X (Twitter) refresh token invalid or revoked", resolvedAccountId);
+      }
+      throw new ProviderAuthError("refresh_failed", 502, "twitter", `X (Twitter) token refresh failed (${twRes.status})`, resolvedAccountId);
+    }
+    const expMs = Date.now() + (typeof twTok.expires_in === "number" ? twTok.expires_in : 7200) * 1000;
+    const updatedPayload: Record<string, unknown> = {
+      ...credPayload,
+      access_token: twTok.access_token,
+      bearer_token: twTok.access_token,
+      refresh_token: typeof twTok.refresh_token === "string" && twTok.refresh_token ? twTok.refresh_token : refreshToken,
+      token_refreshed_at: new Date().toISOString(),
+      token_expires_at: new Date(expMs).toISOString(),
+    };
+    const newEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(updatedPayload), aad);
+    const cas = await casUpdateConnectedAccountCredentials(env, account, oldEnc, newEnc);
+    if (cas.conflict) {
+      const recovered = await handleCasConflictRecovery();
+      if (recovered) return recovered;
+    }
+    providerTokenCache.set(cacheKey, {
+      accessToken: twTok.access_token,
+      expiresAtMs: Math.min(expMs, Date.now() + SHORT_LIVED_CACHE_CAP_MS),
+      payload: updatedPayload,
+      accountId: resolvedAccountId,
+      rowId: account.id,
+      accountName: account.account_name ?? null,
+      accountEmail: account.account_email ?? null,
+      metadata: meta,
+    });
+    return {
+      provider: "twitter",
+      accountId: resolvedAccountId,
+      rowId: account.id,
+      accountName: account.account_name ?? null,
+      accountEmail: account.account_email ?? null,
+      accessToken: twTok.access_token,
+      expiresAtMs: expMs,
+      expiresAtIso: new Date(expMs).toISOString(),
+      payload: updatedPayload,
+      metadata: meta,
+    };
+  })().finally(() => {
+    inflightProviderRefreshes.delete(cacheKey);
+  });
+
+  inflightProviderRefreshes.set(cacheKey, flight);
+  return flight;
+}
+
+async function getUserYouTubeAccessToken(
+  env: Env,
+  accountId: string,
+  userId: string,
+  options: { requireSourceVault?: boolean } = {},
+): Promise<string | null> {
+  if (!accountId.trim()) return null;
+  try {
+    const res = await getValidProviderToken(env, {
+      userId,
+      provider: "youtube",
+      accountId,
+      requireSourceVault: options.requireSourceVault,
+    });
+    return res?.accessToken ?? null;
+  } catch (err) {
+    if (err instanceof ProviderAuthError && (err.code === "needs_reauth" || err.code === "not_connected" || err.code === "ambiguous_owner")) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /**
  * Load a connected Meta account's page/user graph token for publication stats.
- * Ownership is enforced by the p_user_id filter (same anti-laundering rule the
- * credential RPCs carry): a PC may only ever resolve its own owner's accounts.
+ * Ownership is enforced by userId filter and AAD v2 vault verification.
  */
 async function loadMetaGraphToken(
   env: Env,
   userId: string,
   accountId: string,
+  provider: "instagram" | "facebook" = "instagram",
 ): Promise<{ token: string; payload: Record<string, unknown> } | null> {
-  const enc = await rpcRaw(env, "cloud_get_credentials_by_account_id", {
-    p_account_id: accountId,
-    p_user_id: userId,
-  });
-  if (typeof enc !== "string" || !enc) return null;
-  const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, enc);
-  let payload: Record<string, unknown> = {};
   try {
-    payload = JSON.parse(plaintext) as Record<string, unknown>;
-  } catch { /* bare-token payloads degrade to an empty object. */ }
-  const token = typeof payload.access_token === "string" && payload.access_token
-    ? payload.access_token
-    : typeof payload.user_access_token === "string"
-      ? payload.user_access_token
-      : "";
-  if (!token) return null;
-  return { token, payload };
+    const res = await getValidProviderToken(env, { userId, provider, accountId });
+    if (res) return { token: res.accessToken, payload: res.payload };
+  } catch (err) {
+    if (err instanceof ProviderAuthError && err.code === "needs_reauth") throw err;
+  }
+  const altProvider = provider === "instagram" ? "facebook" : "instagram";
+  try {
+    const alt = await getValidProviderToken(env, { userId, provider: altProvider, accountId });
+    if (alt) return { token: alt.accessToken, payload: alt.payload };
+  } catch (err) {
+    if (err instanceof ProviderAuthError && err.code === "needs_reauth") throw err;
+  }
+  return null;
 }
 
 /**
@@ -466,24 +1230,23 @@ async function fetchMetaPublicationStats(
   remoteId: string,
   provider: "instagram" | "facebook",
 ): Promise<{ views: number | null; likes: number | null; comments: number | null }> {
-  const cred = await loadMetaGraphToken(env, userId, accountId);
+  const cred = await loadMetaGraphToken(env, userId, accountId, provider);
   if (!cred) throw new Error("no usable Meta credential for this publication");
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const bearerHeaders = { Authorization: `Bearer ${cred.token}` };
 
   if (provider === "instagram") {
-    // like_count/comments_count are safely readable for owned media of every
-    // type; play_count only exists for VIDEO/REELS so it is a separate read.
     const mRes = await fetch(
-      `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=media_type,like_count,comments_count&access_token=${encodeURIComponent(cred.token)}`,
-      { signal: AbortSignal.timeout(8000) },
+      `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=media_type,like_count,comments_count`,
+      { headers: bearerHeaders, signal: AbortSignal.timeout(8000) },
     );
     if (!mRes.ok) throw new Error(`Instagram media lookup failed: ${mRes.status}`);
     const media = await mRes.json() as Record<string, unknown>;
     let views: number | null = null;
     if (media.media_type === "VIDEO" || media.media_type === "REELS") {
       const pRes = await fetch(
-        `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=play_count&access_token=${encodeURIComponent(cred.token)}`,
-        { signal: AbortSignal.timeout(8000) },
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=play_count`,
+        { headers: bearerHeaders, signal: AbortSignal.timeout(8000) },
       );
       if (pRes.ok) {
         const playJson = await pRes.json() as Record<string, unknown>;
@@ -493,12 +1256,9 @@ async function fetchMetaPublicationStats(
     return { views, likes: num(media.like_count), comments: num(media.comments_count) };
   }
 
-  // Facebook Page post: engagement via summary fields; views best-effort via
-  // insights (read_insights) — absent permission or non-video posts degrade to
-  // null views instead of failing the whole refresh.
   const pRes = await fetch(
-    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=likes.summary(total_count).limit(0),comments.summary(total_count).limit(0)&access_token=${encodeURIComponent(cred.token)}`,
-    { signal: AbortSignal.timeout(8000) },
+    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}?fields=likes.summary(total_count).limit(0),comments.summary(total_count).limit(0)`,
+    { headers: bearerHeaders, signal: AbortSignal.timeout(8000) },
   );
   if (!pRes.ok) throw new Error(`Facebook post lookup failed: ${pRes.status}`);
   const post = await pRes.json() as Record<string, unknown>;
@@ -506,8 +1266,8 @@ async function fetchMetaPublicationStats(
     (obj as { summary?: { total_count?: unknown } } | null)?.summary?.total_count;
   let views: number | null = null;
   const iRes = await fetch(
-    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}/insights?metric=post_video_views&access_token=${encodeURIComponent(cred.token)}`,
-    { signal: AbortSignal.timeout(8000) },
+    `https://graph.facebook.com/v21.0/${encodeURIComponent(remoteId)}/insights?metric=post_video_views`,
+    { headers: bearerHeaders, signal: AbortSignal.timeout(8000) },
   );
   if (iRes.ok) {
     const insights = await iRes.json() as { data?: Array<{ values?: Array<{ value?: unknown }> }> };
@@ -516,6 +1276,49 @@ async function fetchMetaPublicationStats(
     if (typeof value === "number" && Number.isFinite(value)) views = value;
   }
   return { views, likes: num(summaryCount(post.likes)), comments: num(summaryCount(post.comments)) };
+}
+
+async function getDecryptedUserGeminiKey(
+  env: Env,
+  userId: string,
+): Promise<{ apiKey: string | null; keyPrefix: string | null }> {
+  const keyRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_get_gemini_key`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ p_user_id: userId }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!keyRes.ok) {
+    throw new Error(`gemini key lookup failed: ${keyRes.status}`);
+  }
+  const encKey = (await keyRes.json()) as string | null;
+  if (!encKey || typeof encKey !== "string") {
+    return { apiKey: null, keyPrefix: null };
+  }
+  const aad = buildVaultAad(userId, "gemini", "default");
+  const dec = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, encKey, aad);
+  if (dec.needsMigration) {
+    const migratedEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, dec.plaintext, aad);
+    const casUrl = new URL(`${env.SUPABASE_URL}/rest/v1/gemini_connections`);
+    casUrl.searchParams.set("user_id", `eq.${userId}`);
+    casUrl.searchParams.set("api_key_encrypted", `eq.${encKey}`);
+    await fetch(casUrl.toString(), {
+      method: "PATCH",
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ api_key_encrypted: migratedEnc }),
+    }).catch(() => null);
+  }
+  const apiKey = dec.plaintext.trim();
+  const keyPrefix = apiKey.length >= 12 ? `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}` : null;
+  return { apiKey: apiKey || null, keyPrefix };
 }
 
 const PUBLICATION_STATS_TTL_MS = 15 * 60 * 1000;
@@ -579,6 +1382,32 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+export function parseConfiguredOwnerAllowlist(env: Env): string[] | null {
+  const ownerRaw = (env.PC_OWNER_USER_IDS ?? "").trim();
+  const owners = ownerRaw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (owners.length === 0 || owners.some(owner => !UUID_RE.test(owner))) {
+    return null;
+  }
+  return owners;
+}
+
+export function authenticatePcWorkerScope(
+  env: Env,
+  request: Request,
+): { owners: string[]; scopedUserId: string | null } | null {
+  if (!isPcWorkerAuth(env, request)) return null;
+  const owners = parseConfiguredOwnerAllowlist(env);
+  if (!owners) return null;
+  const uidHeader = request.headers.get("X-Dispatch-User-Id")?.trim() || "";
+  if (uidHeader) {
+    if (!UUID_RE.test(uidHeader) || !owners.includes(uidHeader.toLowerCase())) {
+      return null;
+    }
+    return { owners, scopedUserId: uidHeader.toLowerCase() };
+  }
+  return { owners, scopedUserId: null };
+}
+
 export async function authenticate(env: Env, request: Request): Promise<{ userId: string; email: string } | null> {
   const auth = request.headers.get("Authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return null;
@@ -590,10 +1419,8 @@ export async function authenticate(env: Env, request: Request): Promise<{ userId
     // ONLY when that user is an explicitly authorized PC owner.
     // Audit 2026-10-28: fail CLOSED when the allowlist is missing or malformed.
     // A permissive fallback let one leaked worker token impersonate every user.
-    const ownerRaw = (env.PC_OWNER_USER_IDS ?? "").trim();
-    const owners = ownerRaw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-    const malformed = owners.some(owner => !UUID_RE.test(owner));
-    if (owners.length === 0 || malformed) {
+    const owners = parseConfiguredOwnerAllowlist(env);
+    if (!owners) {
       console.log(JSON.stringify({
         audit: true,
         error: "PC_OWNER_USER_IDS is missing or malformed; worker-token request rejected",
@@ -775,22 +1602,52 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
       let lastErrorMessage: string | null = null;
 
       try {
-        let r2Key = job.r2_key;
-        if (!r2Key) {
-          const mediaRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${job.user_id}&status=eq.active&clip_id=eq.${encodeURIComponent(job.clip_id)}&order=created_at.desc&limit=1`,
-            { headers: svc }
+        const expectedFinalPrefix = `final/${job.user_id}/`;
+        let r2Key = typeof job.r2_key === "string" ? job.r2_key.trim() : null;
+        if (r2Key) {
+          if (r2Key.includes("..") || !r2Key.startsWith(expectedFinalPrefix)) {
+            throw new Error("Forbidden: job r2_key does not belong to job owner final prefix");
+          }
+          const verifyRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${job.user_id}&final_key=eq.${encodeURIComponent(r2Key)}&status=eq.active&select=id,user_id,kind,final_key&limit=1`,
+            { headers: svc },
           );
+          if (verifyRes.ok) {
+            const verifyRows = (await verifyRes.json()) as Array<{ user_id?: string; kind?: string }>;
+            if (verifyRows.length > 0) {
+              const row = verifyRows[0];
+              if (row.user_id && row.user_id !== job.user_id) {
+                throw new Error("Forbidden: media object belongs to a different user");
+              }
+              if (row.kind && row.kind !== "clip_video") {
+                throw new Error(`Invalid media asset kind for publishing: ${row.kind}`);
+              }
+            }
+          }
+        } else {
+          const mediaUrl = new URL(`${env.SUPABASE_URL}/rest/v1/media_objects`);
+          mediaUrl.searchParams.set("user_id", `eq.${job.user_id}`);
+          mediaUrl.searchParams.set("status", "eq.active");
+          mediaUrl.searchParams.set("kind", "eq.clip_video");
+          mediaUrl.searchParams.set("clip_id", `eq.${job.clip_id}`);
+          mediaUrl.searchParams.set("order", "created_at.desc");
+          mediaUrl.searchParams.set("limit", "1");
+          const mediaRes = await fetch(mediaUrl.toString(), { headers: svc });
           if (mediaRes.ok) {
-            const mediaRows = (await mediaRes.json()) as Array<{ final_key?: string | null }>;
-            if (mediaRows.length > 0 && mediaRows[0].final_key) {
+            const mediaRows = (await mediaRes.json()) as Array<{ final_key?: string | null; kind?: string }>;
+            if (
+              mediaRows.length > 0 &&
+              mediaRows[0].final_key &&
+              mediaRows[0].final_key.startsWith(expectedFinalPrefix) &&
+              (!mediaRows[0].kind || mediaRows[0].kind === "clip_video")
+            ) {
               r2Key = mediaRows[0].final_key;
             }
           }
         }
 
         if (!r2Key) {
-          throw new Error("No R2 video object key found for publishing job");
+          throw new Error("No owned rendered clip_video R2 object found for publishing job");
         }
 
         const r2Object = await env.BUCKET.get(r2Key);
@@ -820,7 +1677,23 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
                 continue;
               }
 
-              const accessToken = await getUserYouTubeAccessToken(env, accountId, job.user_id, { requireSourceVault: false });
+              let accessToken: string | null = null;
+              try {
+                const tok = await getValidProviderToken(env, {
+                  userId: job.user_id,
+                  provider: "youtube",
+                  accountId,
+                  requireSourceVault: false,
+                });
+                accessToken = tok?.accessToken ?? null;
+              } catch (authErr) {
+                if (authErr instanceof ProviderAuthError && authErr.code === "needs_reauth") {
+                  results.youtube = { status: "failed", needs_reauth: true, error: authErr.message };
+                  lastErrorMessage = authErr.message;
+                  continue;
+                }
+                throw authErr;
+              }
               if (!accessToken) {
                 results.youtube = { status: "failed", error: "Could not refresh YouTube OAuth access token" };
                 continue;
@@ -921,7 +1794,17 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
                 continue;
               }
 
-              const metaCred = await loadMetaGraphToken(env, job.user_id, accountId);
+              let metaCred: { token: string; payload: Record<string, unknown> } | null = null;
+              try {
+                metaCred = await loadMetaGraphToken(env, job.user_id, accountId, "instagram");
+              } catch (authErr) {
+                if (authErr instanceof ProviderAuthError && authErr.code === "needs_reauth") {
+                  results.instagram = { status: "failed", needs_reauth: true, error: authErr.message };
+                  lastErrorMessage = authErr.message;
+                  continue;
+                }
+                throw authErr;
+              }
               if (!metaCred?.token) {
                 results.instagram = { status: "failed", error: "Could not load Meta graph token" };
                 continue;
@@ -1000,26 +1883,16 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
             }
           } else if (normPlatform === "linkedin") {
             try {
-              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=eq.linkedin&select=id,account_id,credentials_encrypted&limit=1`;
-              const accRes = await fetch(accUrl, { headers: svc });
-              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string; credentials_encrypted?: string }>) : [];
-              const acc = accRows.length > 0 ? accRows[0] : null;
-
-              if (!acc || !acc.credentials_encrypted) {
+              const liToken = await getValidProviderToken(env, { userId: job.user_id, provider: "linkedin" });
+              if (!liToken) {
                 results.linkedin = { status: "skipped_no_account", error: "No connected LinkedIn account found" };
                 continue;
               }
-
-              const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, acc.credentials_encrypted);
-              let cred: Record<string, unknown> = {};
-              try { cred = JSON.parse(plaintext); } catch { cred = { access_token: plaintext }; }
-              const accessToken = typeof cred.access_token === "string" ? cred.access_token : "";
-              const personUrn = typeof cred.account_id === "string" ? cred.account_id : (acc.account_id || "");
-
-              if (!accessToken) {
-                results.linkedin = { status: "failed", error: "No LinkedIn access token" };
-                continue;
-              }
+              const accessToken = liToken.accessToken;
+              const personUrn = typeof liToken.payload.author_urn === "string"
+                ? liToken.payload.author_urn
+                : (typeof liToken.payload.account_id === "string" ? liToken.payload.account_id : liToken.accountId);
+              const acc = { id: liToken.rowId, account_id: liToken.accountId };
 
               const authorUrn = personUrn.startsWith("urn:li:") ? personUrn : `urn:li:person:${personUrn}`;
               const liRes = await fetch("https://api.linkedin.com/v2/ugcPosts", {
@@ -1085,25 +1958,13 @@ export async function drainPublishingQueue(env: Env): Promise<{ processed: numbe
             }
           } else if (normPlatform === "twitter" || normPlatform === "x") {
             try {
-              const accUrl = `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${job.user_id}&provider=in.(twitter,x)&select=id,account_id,credentials_encrypted&limit=1`;
-              const accRes = await fetch(accUrl, { headers: svc });
-              const accRows = accRes.ok ? ((await accRes.json()) as Array<{ id: string; account_id?: string; credentials_encrypted?: string }>) : [];
-              const acc = accRows.length > 0 ? accRows[0] : null;
-
-              if (!acc || !acc.credentials_encrypted) {
+              const twToken = await getValidProviderToken(env, { userId: job.user_id, provider: "twitter" });
+              if (!twToken) {
                 results[normPlatform] = { status: "skipped_no_account", error: "No connected X (Twitter) account found" };
                 continue;
               }
-
-              const plaintext = await decryptToken(env.TOKEN_VAULT_KEY, acc.credentials_encrypted);
-              let cred: Record<string, unknown> = {};
-              try { cred = JSON.parse(plaintext); } catch { cred = { access_token: plaintext }; }
-              const accessToken = typeof cred.access_token === "string" ? cred.access_token : (typeof cred.bearer_token === "string" ? cred.bearer_token : "");
-
-              if (!accessToken) {
-                results[normPlatform] = { status: "failed", error: "No X access token" };
-                continue;
-              }
+              const accessToken = twToken.accessToken;
+              const acc = { id: twToken.rowId, account_id: twToken.accountId };
 
               const tweetText = `${job.title}${job.description ? `\n\n${job.description}` : ""}`.slice(0, 280);
               const twRes = await fetch("https://api.twitter.com/2/tweets", {
@@ -1231,31 +2092,53 @@ export function isPcWorkerAuth(env: Env, request: Request): boolean {
 async function refreshInstagramLoginTokens(env: Env): Promise<void> {
   const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
   const listRes = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/connected_accounts?provider=eq.instagram&select=id,credentials_encrypted`,
-    { headers: svc }
+    `${env.SUPABASE_URL}/rest/v1/connected_accounts?provider=eq.instagram&select=id,user_id,account_id,credentials_encrypted,metadata`,
+    { headers: svc },
   );
   if (!listRes.ok) {
     console.error("Instagram token refresh: could not list accounts", listRes.status);
     return;
   }
-  const rows = await listRes.json() as Array<{ id: string; credentials_encrypted: string }>;
+  const rows = await listRes.json() as ConnectedAccountRow[];
   const refreshAfterMs = 30 * 24 * 60 * 60 * 1000;
+  const expiryWarnWindowMs = 7 * 24 * 60 * 60 * 1000;
   for (const row of rows) {
     try {
-      const raw = await decryptToken(env.TOKEN_VAULT_KEY, row.credentials_encrypted);
-      if (!raw.startsWith("{")) continue;
-      const creds = JSON.parse(raw) as Record<string, unknown>;
+      if (!row.credentials_encrypted || !row.user_id) continue;
+      if (row.metadata?.needs_reauth === true) continue;
+      const resolvedAccountId = String(row.account_id || row.id);
+      const aad = buildVaultAad(row.user_id, "instagram", resolvedAccountId);
+      const dec = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, row.credentials_encrypted, aad);
+      if (!dec.plaintext.startsWith("{")) continue;
+      const creds = JSON.parse(dec.plaintext) as Record<string, unknown>;
       if (creds.auth_mode !== "instagram_login" || typeof creds.access_token !== "string") continue;
-      const lastRefresh = Date.parse(
-        (creds.token_refreshed_at as string) || (creds.token_obtained_at as string) || ""
-      );
-      if (Number.isFinite(lastRefresh) && Date.now() - lastRefresh < refreshAfterMs) continue;
 
-      const refreshRes = await fetch("https://graph.instagram.com/refresh_access_token?" + new URLSearchParams({
-        grant_type: "ig_refresh_token",
-        access_token: creds.access_token,
-      }));
+      const expiresAtMs = typeof creds.token_expires_at === "string" ? Date.parse(creds.token_expires_at) : Number.NaN;
+      const lastRefresh = Date.parse(
+        (creds.token_refreshed_at as string) || (creds.token_obtained_at as string) || "",
+      );
+      const nearExpiry = Number.isFinite(expiresAtMs) && expiresAtMs - Date.now() < expiryWarnWindowMs;
+      const dueByAge = !Number.isFinite(lastRefresh) || Date.now() - lastRefresh >= refreshAfterMs;
+      if (!nearExpiry && !dueByAge) {
+        if (dec.needsMigration) {
+          const migratedEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(creds), aad);
+          await casUpdateConnectedAccountCredentials(env, row, row.credentials_encrypted, migratedEnc).catch(() => null);
+        }
+        continue;
+      }
+
+      const refreshRes = await fetch("https://graph.instagram.com/refresh_access_token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "ig_refresh_token",
+          access_token: creds.access_token,
+        }),
+      });
       if (!refreshRes.ok) {
+        if (refreshRes.status === 400 || refreshRes.status === 401) {
+          await markConnectedAccountNeedsReauth(env, row, `ig_cron_refresh_${refreshRes.status}`);
+        }
         console.error("Instagram token refresh failed for", row.id, refreshRes.status);
         continue;
       }
@@ -1269,14 +2152,13 @@ async function refreshInstagramLoginTokens(env: Env): Promise<void> {
         token_refreshed_at: now.toISOString(),
         token_expires_at: new Date(now.getTime() + (refreshed.expires_in ?? 5184000) * 1000).toISOString(),
       };
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(updated));
-      const patchRes = await fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${row.id}`, {
-        method: "PATCH",
-        headers: { ...svc, "content-type": "application/json" },
-        body: JSON.stringify({ credentials_encrypted: enc }),
-      });
-      if (!patchRes.ok) console.error("Instagram token refresh: could not persist", row.id, patchRes.status);
-      else console.log("Instagram token refreshed for", row.id);
+      const enc = await encryptTokenV2(env.TOKEN_VAULT_KEY, JSON.stringify(updated), aad);
+      const cas = await casUpdateConnectedAccountCredentials(env, row, row.credentials_encrypted, enc);
+      if (!cas.updated && !cas.conflict) {
+        console.error("Instagram token refresh: could not persist", row.id);
+      } else if (cas.updated) {
+        console.log("Instagram token refreshed for", row.id);
+      }
     } catch (err) {
       console.error("Instagram token refresh error:", err instanceof Error ? err.message : "unknown error");
     }
@@ -1370,97 +2252,49 @@ export default {
       if (!key || key.includes("..")) return json(400, { error: "invalid avatar key" });
       let obj = await env.BUCKET.get("avatars/" + key);
 
-      // On-demand self-heal: if an Instagram avatar is not cached in R2 yet, fetch and cache it
+      // On-demand cache fill only from the account's own stored public avatar URL.
+      // Never decrypt credentials, traverse other providers, or mutate DB rows on
+      // an unauthenticated public avatar GET, and never interpolate accountId into or=().
       if (!obj && key.startsWith("instagram_") && key.endsWith(".jpg")) {
         const accountId = key.replace(/^instagram_/, "").replace(/\.jpg$/, "");
+        if (!/^[A-Za-z0-9._-]{1,128}$/.test(accountId)) {
+          return json(400, { error: "invalid avatar account id" });
+        }
         try {
-          const accRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/connected_accounts?or=(account_id.eq.${encodeURIComponent(accountId)},account_name.eq.${encodeURIComponent(accountId)},account_name.eq.@${encodeURIComponent(accountId)})&provider=eq.instagram&select=id,user_id,credentials_encrypted,avatar_url&limit=1`,
-            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-          );
+          const accUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+          accUrl.searchParams.set("account_id", `eq.${accountId}`);
+          accUrl.searchParams.set("provider", "eq.instagram");
+          accUrl.searchParams.set("select", "avatar_url");
+          accUrl.searchParams.set("limit", "1");
+          const accRes = await fetch(accUrl.toString(), {
+            headers: {
+              apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            },
+          });
           if (accRes.ok) {
-            const rows = (await accRes.json()) as Array<{ id: string; user_id?: string; credentials_encrypted?: string; avatar_url?: string }>;
+            const rows = (await accRes.json()) as Array<{ avatar_url?: string }>;
             const accRow = rows[0];
-            if (accRow) {
-              let fetchedBytes: ArrayBuffer | null = null;
-              if (accRow.avatar_url && !accRow.avatar_url.includes(url.origin)) {
-                try {
-                  const directRes = await fetch(accRow.avatar_url, {
-                    headers: {
-                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    },
+            if (accRow?.avatar_url && !accRow.avatar_url.includes(url.origin)) {
+              const directRes = await fetch(accRow.avatar_url, {
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                },
+              });
+              if (directRes.ok) {
+                const fetchedBytes = await directRes.arrayBuffer();
+                if (fetchedBytes.byteLength > 0) {
+                  await env.BUCKET.put("avatars/" + key, fetchedBytes, {
+                    httpMetadata: { contentType: "image/jpeg" },
                   });
-                  if (directRes.ok) fetchedBytes = await directRes.arrayBuffer();
-                } catch {}
-              }
-              if (!fetchedBytes && accRow.credentials_encrypted) {
-                try {
-                  const raw = await decryptToken(env.TOKEN_VAULT_KEY, accRow.credentials_encrypted);
-                  if (raw.startsWith("{")) {
-                    const creds = JSON.parse(raw) as { access_token?: string };
-                    if (creds.access_token) {
-                      const meRes = await fetch(
-                        `https://graph.instagram.com/v21.0/me?fields=profile_picture_url&access_token=${creds.access_token}`
-                      );
-                      if (meRes.ok) {
-                        const meData = (await meRes.json()) as { profile_picture_url?: string };
-                        if (meData.profile_picture_url) {
-                          const imgRes = await fetch(meData.profile_picture_url, {
-                            headers: {
-                              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            },
-                          });
-                          if (imgRes.ok) fetchedBytes = await imgRes.arrayBuffer();
-                        }
-                      }
-                    }
-                  }
-                } catch {}
-              }
-              // Fallback to user's other social profile avatar (e.g. YouTube / Twitter / LinkedIn)
-              if (!fetchedBytes && accRow.user_id) {
-                try {
-                  const otherRes = await fetch(
-                    `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${accRow.user_id}&avatar_url=not.is.null&select=avatar_url&limit=3`,
-                    { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-                  );
-                  if (otherRes.ok) {
-                    const others = (await otherRes.json()) as Array<{ avatar_url?: string }>;
-                    for (const o of others) {
-                      if (o.avatar_url && !o.avatar_url.includes(url.origin)) {
-                        const fallbackImgRes = await fetch(o.avatar_url, {
-                          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-                        });
-                        if (fallbackImgRes.ok) {
-                          fetchedBytes = await fallbackImgRes.arrayBuffer();
-                          break;
-                        }
-                      }
-                    }
-                  }
-                } catch {}
-              }
-              if (fetchedBytes && fetchedBytes.byteLength > 0) {
-                await env.BUCKET.put("avatars/" + key, fetchedBytes, {
-                  httpMetadata: { contentType: "image/jpeg" },
-                });
-                const permanentUrl = `${url.origin}/avatars/${key}`;
-                fetch(`${env.SUPABASE_URL}/rest/v1/connected_accounts?id=eq.${accRow.id}`, {
-                  method: "PATCH",
-                  headers: {
-                    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-                    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-                    "content-type": "application/json",
-                  },
-                  body: JSON.stringify({ avatar_url: permanentUrl }),
-                }).catch(() => null);
-                obj = await env.BUCKET.get("avatars/" + key);
+                  obj = await env.BUCKET.get("avatars/" + key);
+                }
               }
             }
           }
         } catch (e) {
-          console.error("On-demand Instagram avatar fetch failed:", e);
+          console.error("On-demand Instagram avatar fetch failed:", e instanceof Error ? e.message : String(e));
         }
       }
 
@@ -1495,13 +2329,13 @@ export default {
       let finalKey: string | null = null;
       let mimeType: string = "video/mp4";
 
-      // 1. FAST PATH (<0.1ms): Edge-verified encrypted streaming ticket (zero Supabase WAN calls)
+      // 1. FAST PATH (<0.1ms): Edge-verified encrypted streaming ticket bound to mediaObjectId
       const sig = url.searchParams.get("sig");
       if (sig) {
         try {
-          const raw = await decryptToken(env.TOKEN_VAULT_KEY, sig);
-          if (raw.startsWith("{")) {
-            const ticket = JSON.parse(raw) as { k?: string; u?: string; m?: string; e?: number };
+          const dec = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, sig, `media_stream|${mediaObjectId}`);
+          if (dec.plaintext.startsWith("{")) {
+            const ticket = JSON.parse(dec.plaintext) as { k?: string; u?: string; m?: string; e?: number };
             if (ticket.k && ticket.e && Date.now() < ticket.e) {
               finalKey = ticket.k;
               if (ticket.m) mimeType = ticket.m;
@@ -1510,14 +2344,9 @@ export default {
         } catch {}
       }
 
-      // 2. FALLBACK: Full Supabase Auth + DB lookup if ticket missing/expired
+      // 2. FALLBACK: Header-authenticated Supabase Auth + DB lookup (never ?token= query auth)
       if (!finalKey) {
-        const reqHeaders = new Headers(request.headers);
-        if (url.searchParams.has("token")) {
-          reqHeaders.set("Authorization", "Bearer " + url.searchParams.get("token"));
-        }
-        const fakeReq = new Request(request.url, { headers: reqHeaders });
-        const user = await authenticate(env, fakeReq);
+        const user = await authenticate(env, request);
         if (!user) return json(401, { error: "unauthorized" });
 
         const obj = await selectOne<MediaObj>(env, "media_objects", mediaObjectId, "user_id,status,final_key,byte_count,mime_type");
@@ -1843,7 +2672,11 @@ export default {
         return json(400, { error: "credentials are required" });
       }
       const credString = typeof body.credentials === "string" ? body.credentials : JSON.stringify(body.credentials);
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, credString);
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        credString,
+        buildVaultAad(user.userId, normalizedProvider, accountId),
+      );
 
       const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
@@ -2170,10 +3003,26 @@ export default {
           const encKey = await keyRes.json() as string | null;
           if (encKey && typeof encKey === "string") {
             try {
-              const plain = await decryptToken(env.TOKEN_VAULT_KEY, encKey);
-              return json(200, { configured: true, api_key: plain });
+              const aad = buildVaultAad(user.userId, "gemini", "default");
+              const dec = await decryptTokenWithMigration(env.TOKEN_VAULT_KEY, encKey, aad);
+              if (dec.needsMigration) {
+                const migratedEnc = await encryptTokenV2(env.TOKEN_VAULT_KEY, dec.plaintext, aad);
+                const casUrl = new URL(`${env.SUPABASE_URL}/rest/v1/gemini_connections`);
+                casUrl.searchParams.set("user_id", `eq.${user.userId}`);
+                casUrl.searchParams.set("api_key_encrypted", `eq.${encKey}`);
+                await fetch(casUrl.toString(), {
+                  method: "PATCH",
+                  headers: {
+                    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+                    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    "content-type": "application/json",
+                  },
+                  body: JSON.stringify({ api_key_encrypted: migratedEnc }),
+                }).catch(() => null);
+              }
+              return json(200, { configured: true, api_key: dec.plaintext });
             } catch (e) {
-              console.warn("Failed to decrypt gemini key:", e);
+              console.warn("Failed to decrypt gemini key:", e instanceof Error ? e.message : String(e));
             }
           }
         }
@@ -2199,7 +3048,11 @@ export default {
       if (!apiKey || apiKey.length < 30 || apiKey.length > 200 || !apiKey.startsWith("AIza")) {
         return json(400, { error: "Invalid Gemini API key format (must start with AIza...)" });
       }
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, apiKey);
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        apiKey,
+        buildVaultAad(user.userId, "gemini", "default"),
+      );
       const prefix = `${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`;
       const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_gemini_key`, {
         method: "POST",
@@ -2314,17 +3167,13 @@ export default {
       }
     }
 
-    // Helper: resolve user ID from ticket or JWT query token
+    // Helper: resolve user ID from single-use ticket or Authorization header (never ?token= query auth)
     async function resolveOAuthUser(): Promise<string | null> {
       const ticket = url.searchParams.get("ticket");
       if (ticket) {
         return await consumeOAuthState("ticket:" + ticket);
       }
-      const qsToken = url.searchParams.get("token");
-      const reqForAuth = qsToken
-        ? new Request(request.url, { headers: { Authorization: `Bearer ${qsToken}` } })
-        : request;
-      const user = await authenticate(env, reqForAuth);
+      const user = await authenticate(env, request);
       return user ? user.userId : null;
     }
 
@@ -2389,7 +3238,6 @@ export default {
       const bad = validateTokenResponse(tok);
       if (bad) return renderOAuthResultHtml("Invalid Token", bad, true);
 
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, tok.refresh_token as string);
       let email: string | null = null;
       try {
         const payload = JSON.parse(atob((tok.id_token as string).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
@@ -2416,6 +3264,20 @@ export default {
       if (!channelId) {
         return renderOAuthResultHtml("YouTube Channel Not Found", "Failed to retrieve your YouTube channel identity from Google. Please ensure your Google account has an active YouTube channel.", true);
       }
+
+      const issuedAt = new Date();
+      const ytExpiresIn = typeof tok.expires_in === "number" ? tok.expires_in : 3600;
+      const ytPayload = {
+        refresh_token: tok.refresh_token as string,
+        ...(typeof tok.access_token === "string" && tok.access_token ? { access_token: tok.access_token } : {}),
+        token_obtained_at: issuedAt.toISOString(),
+        token_expires_at: new Date(issuedAt.getTime() + ytExpiresIn * 1000).toISOString(),
+      };
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        JSON.stringify(ytPayload),
+        buildVaultAad(uid, "youtube", channelId),
+      );
 
       const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
@@ -2493,9 +3355,15 @@ export default {
       let longToken = tok.access_token;
       let expiresIn = 3600;
       try {
-        const longRes = await fetch("https://graph.instagram.com/access_token?" + new URLSearchParams({
-          grant_type: "ig_exchange_token", client_secret: clientSecret, access_token: longToken,
-        }));
+        const longRes = await fetch("https://graph.instagram.com/access_token", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "ig_exchange_token",
+            client_secret: clientSecret,
+            access_token: longToken,
+          }),
+        });
         if (longRes.ok) {
           const longData = await longRes.json() as { access_token?: string; expires_in?: number };
           if (longData.access_token) {
@@ -2505,10 +3373,9 @@ export default {
         }
       } catch { /* keep the short-lived token; the refresh cron can still extend it */ }
 
-      const meRes = await fetch(`https://graph.instagram.com/v21.0/me?` + new URLSearchParams({
-        fields: "user_id,username,account_type,profile_picture_url",
-        access_token: longToken,
-      }));
+      const meRes = await fetch("https://graph.instagram.com/v21.0/me?fields=user_id,username,account_type,profile_picture_url", {
+        headers: { Authorization: `Bearer ${longToken}` },
+      });
       const me = await meRes.json() as {
         user_id?: string; id?: string; username?: string; account_type?: string;
         profile_picture_url?: string; error?: { message?: string };
@@ -2534,7 +3401,11 @@ export default {
         token_obtained_at: issuedAt.toISOString(),
         token_expires_at: new Date(issuedAt.getTime() + expiresIn * 1000).toISOString(),
       };
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        JSON.stringify(credPayload),
+        buildVaultAad(uid, "instagram", igUserId),
+      );
 
       let avatarUrl = me.profile_picture_url || null;
       if (avatarUrl) {
@@ -2601,31 +3472,43 @@ export default {
       const clientSecret = env.FACEBOOK_CLIENT_SECRET || env.INSTAGRAM_CLIENT_SECRET || "";
       const redirectUri = "https://dispatch-cloud.resolviaai.workers.dev/oauth/facebook/callback";
 
-      const tokRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
-        client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code
-      }));
+      const tokRes = await fetch("https://graph.facebook.com/v21.0/oauth/access_token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, code,
+        }),
+      });
       const tok = await tokRes.json() as Record<string, unknown>;
       if (!tokRes.ok || !tok.access_token) {
         return renderOAuthResultHtml("Facebook Auth Failed", `Token exchange failed: ${JSON.stringify(tok).slice(0, 100)}`, true);
       }
 
       let longToken = tok.access_token as string;
+      let fbExpiresIn = typeof tok.expires_in === "number" ? tok.expires_in : 5184000;
       try {
-        const longRes = await fetch(`https://graph.facebook.com/v21.0/oauth/access_token?` + new URLSearchParams({
-          grant_type: "fb_exchange_token", client_id: clientId, client_secret: clientSecret, fb_exchange_token: longToken
-        }));
+        const longRes = await fetch("https://graph.facebook.com/v21.0/oauth/access_token", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "fb_exchange_token", client_id: clientId, client_secret: clientSecret, fb_exchange_token: longToken,
+          }),
+        });
         if (longRes.ok) {
           const longData = await longRes.json() as Record<string, unknown>;
           if (longData.access_token) longToken = longData.access_token as string;
+          if (typeof longData.expires_in === "number") fbExpiresIn = longData.expires_in;
         }
       } catch { /* fallback */ }
 
-      // Dispatch publishes Reels to a Facebook Page, so a Page (with its Page
-      // token) is mandatory. A "me"-fallback connection would be dead on arrival.
-      let page: { id: string; title: string; accessToken: string | null; avatar: string | null } | null = null;
+      // Dispatch publishes Reels to Facebook Pages, so Pages (with their Page
+      // tokens) are mandatory. Store ALL admined Pages instead of blindly picking data[0].
+      const pages: Array<{ id: string; title: string; accessToken: string | null; avatar: string | null }> = [];
       let pagesReadable = true;
       try {
-        const pagesRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,picture{url}&access_token=${longToken}`);
+        const pagesRes = await fetch("https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,picture{url}", {
+          headers: { Authorization: `Bearer ${longToken}` },
+        });
         pagesReadable = pagesRes.ok;
         if (pagesRes.ok) {
           const pagesData = await pagesRes.json() as {
@@ -2636,13 +3519,16 @@ export default {
               picture?: { data?: { url?: string } };
             }>;
           };
-          if (pagesData.data && pagesData.data.length > 0) {
-            page = {
-              id: pagesData.data[0].id,
-              title: pagesData.data[0].name,
-              accessToken: pagesData.data[0].access_token || null,
-              avatar: pagesData.data[0].picture?.data?.url || null,
-            };
+          if (Array.isArray(pagesData.data)) {
+            for (const row of pagesData.data) {
+              if (!row?.id || !row?.name) continue;
+              pages.push({
+                id: row.id,
+                title: row.name,
+                accessToken: row.access_token || null,
+                avatar: row.picture?.data?.url || null,
+              });
+            }
           }
         }
       } catch (err) {
@@ -2653,7 +3539,7 @@ export default {
       if (!pagesReadable) {
         return renderOAuthResultHtml("Facebook Unavailable", "Facebook did not return your Pages. Please retry in a moment.", true, "facebook");
       }
-      if (!page) {
+      if (pages.length === 0) {
         return renderOAuthResultHtml(
           "Facebook Page Required",
           "No Facebook Page is available for this login. Dispatch publishes Reels to a Page — make sure you admin a Page, then retry.",
@@ -2662,30 +3548,52 @@ export default {
         );
       }
 
-      const credPayload = {
-        access_token: page.accessToken || longToken,
-        user_access_token: longToken,
-        page_id: page.id,
-        account_id: page.id
-      };
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+      const issuedAt = new Date();
+      const tokenExpiresAtIso = new Date(issuedAt.getTime() + fbExpiresIn * 1000).toISOString();
+      const storedNames: string[] = [];
+      let lastDbError = "";
 
-      const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
-        method: "POST",
-        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          p_user_id: uid, p_provider: "facebook", p_account_id: page.id, p_account_name: page.title,
-          p_account_email: null, p_avatar_url: page.avatar, p_credentials_encrypted: enc,
-          p_metadata: { page_id: page.id, title: page.title },
-        }),
-      });
-      if (!storeRes.ok) {
-        const errText = await storeRes.text().catch(() => "");
-        console.error("Failed to store Facebook account:", storeRes.status, errText);
-        return renderOAuthResultHtml("Database Error", `Failed to save Facebook account: ${errText.slice(0, 150)}`, true);
+      for (const page of pages) {
+        const credPayload = {
+          access_token: page.accessToken || longToken,
+          user_access_token: longToken,
+          page_id: page.id,
+          account_id: page.id,
+          token_obtained_at: issuedAt.toISOString(),
+          token_expires_at: tokenExpiresAtIso,
+        };
+        const enc = await encryptToken(
+          env.TOKEN_VAULT_KEY,
+          JSON.stringify(credPayload),
+          buildVaultAad(uid, "facebook", page.id),
+        );
+
+        const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
+          method: "POST",
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            p_user_id: uid, p_provider: "facebook", p_account_id: page.id, p_account_name: page.title,
+            p_account_email: null, p_avatar_url: page.avatar, p_credentials_encrypted: enc,
+            p_metadata: { page_id: page.id, title: page.title },
+          }),
+        });
+        if (!storeRes.ok) {
+          const errText = await storeRes.text().catch(() => "");
+          lastDbError = errText;
+          console.error("Failed to store Facebook page:", page.id, storeRes.status, errText);
+          continue;
+        }
+        storedNames.push(page.title);
       }
 
-      return renderOAuthResultHtml("Facebook Connected", `Page "${page.title}" connected successfully! You can return to Dispatch.`, false, "facebook");
+      if (storedNames.length === 0) {
+        return renderOAuthResultHtml("Database Error", `Failed to save Facebook account: ${lastDbError.slice(0, 150)}`, true);
+      }
+
+      const summary = storedNames.length === 1
+        ? `Page "${storedNames[0]}" connected successfully! You can return to Dispatch.`
+        : `${storedNames.length} Facebook Pages (${storedNames.slice(0, 3).join(", ")}${storedNames.length > 3 ? "…" : ""}) connected successfully! You can return to Dispatch.`;
+      return renderOAuthResultHtml("Facebook Connected", summary, false, "facebook");
     }
 
     // 4. LinkedIn Start & Callback
@@ -2749,13 +3657,21 @@ export default {
         }
       } catch { /* use defaults */ }
 
+      const liIssuedAt = new Date();
+      const liExpiresIn = typeof tok.expires_in === "number" ? tok.expires_in : 5184000;
       const credPayload = {
         access_token: tok.access_token,
         refresh_token: tok.refresh_token ?? null,
         author_urn: authorUrn,
-        account_id: authorUrn
+        account_id: authorUrn,
+        token_obtained_at: liIssuedAt.toISOString(),
+        token_expires_at: new Date(liIssuedAt.getTime() + liExpiresIn * 1000).toISOString(),
       };
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        JSON.stringify(credPayload),
+        buildVaultAad(uid, "linkedin", authorUrn),
+      );
 
       const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
@@ -2784,7 +3700,11 @@ export default {
         const codeVerifier = generateRandomString(48);
         const codeChallenge = await sha256B64Url(codeVerifier);
         await rpc(env, "cloud_put_oauth_state", { p_state: rawState, p_user_id: uid });
-        const encryptedState = await encryptToken(env.TOKEN_VAULT_KEY, `${rawState}:::${codeVerifier}`);
+        const encryptedState = await encryptToken(
+          env.TOKEN_VAULT_KEY,
+          `${rawState}:::${codeVerifier}`,
+          "oauth_pkce|twitter|state",
+        );
         return Response.redirect(
           buildTwitterAuthorizeUrl(env.TWITTER_CLIENT_ID || "", "https://dispatch-cloud.resolviaai.workers.dev/oauth/twitter/callback", encryptedState, codeChallenge),
           302
@@ -2804,8 +3724,12 @@ export default {
       let rawState = "";
       let codeVerifier = "";
       try {
-        const decrypted = await decryptToken(env.TOKEN_VAULT_KEY, stateParam);
-        const parts = decrypted.split(":::");
+        const dec = await decryptTokenWithMigration(
+          env.TOKEN_VAULT_KEY,
+          stateParam,
+          "oauth_pkce|twitter|state",
+        );
+        const parts = dec.plaintext.split(":::");
         rawState = parts[0] || "";
         codeVerifier = parts[1] || "";
       } catch {
@@ -2853,14 +3777,22 @@ export default {
         }
       } catch { /* use defaults */ }
 
+      const twIssuedAt = new Date();
+      const twExpiresIn = typeof tok.expires_in === "number" ? tok.expires_in : 7200;
       const credPayload = {
         access_token: tok.access_token,
         refresh_token: tok.refresh_token ?? null,
         bearer_token: tok.access_token,
         account_id: twitterId,
-        username: twitterHandle
+        username: twitterHandle,
+        token_obtained_at: twIssuedAt.toISOString(),
+        token_expires_at: new Date(twIssuedAt.getTime() + twExpiresIn * 1000).toISOString(),
       };
-      const enc = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(credPayload));
+      const enc = await encryptToken(
+        env.TOKEN_VAULT_KEY,
+        JSON.stringify(credPayload),
+        buildVaultAad(uid, "twitter", twitterId),
+      );
 
       const storeRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_store_connected_account`, {
         method: "POST",
@@ -3485,6 +4417,206 @@ export default {
       return json(200, { publications: rows.map(publicationPayload) });
     }
 
+    // ---- PC-scoped Remote Processing Jobs Broker (no SUPABASE_SERVICE_ROLE_KEY on PC) ----
+    if (url.pathname.startsWith("/sync/pc/remote-jobs/") && request.method === "POST") {
+      const pcScope = authenticatePcWorkerScope(env, request);
+      if (!pcScope) return json(403, { error: "PC worker auth required" });
+      const rl = checkPcBrokerRateLimit(`pc:jobs:${pcScope.scopedUserId ?? "worker"}`, 180, 60_000);
+      if (!rl.allowed) {
+        return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+      }
+      const svcHeaders = {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "content-type": "application/json",
+      };
+
+      if (url.pathname === "/sync/pc/remote-jobs/claim") {
+        const body = await readJson<{ worker_id?: string }>(request);
+        const workerId = typeof body?.worker_id === "string" && body.worker_id.trim()
+          ? body.worker_id.trim().slice(0, 128)
+          : "owner-pc-1";
+        try {
+          const rows = await rpcRaw(env, "cloud_claim_job", { p_worker_id: workerId });
+          const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : (rows as Record<string, unknown> | null);
+          const claimedJobId = typeof row?.job_id === "string" ? row.job_id : (typeof row?.id === "string" ? row.id : "");
+          if (!row || !claimedJobId) return json(200, { job: null });
+          const jobUserId = String(row.user_id || "").toLowerCase();
+          if (!jobUserId || !pcScope.owners.includes(jobUserId) || (pcScope.scopedUserId && pcScope.scopedUserId !== jobUserId)) {
+            return json(403, { error: "claimed job user_id is outside PC_OWNER_USER_IDS allowlist" });
+          }
+          return json(200, {
+            job: {
+              job_id: claimedJobId,
+              user_id: String(row.user_id),
+              youtube_url: String(row.youtube_url || ""),
+              source: typeof row.source === "string" && row.source ? row.source : "youtube",
+              upload_object_id: typeof row.upload_object_id === "string" ? row.upload_object_id : "",
+              source_title: typeof row.source_title === "string" ? row.source_title : "",
+            },
+          });
+        } catch (e) {
+          return json(502, { error: `remote job claim failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (url.pathname === "/sync/pc/remote-jobs/stage") {
+        const body = await readJson<{ job_id?: string; stage?: string; video_id?: string; duration?: number | null }>(request);
+        const jobId = typeof body?.job_id === "string" ? body.job_id.trim() : "";
+        const stage = typeof body?.stage === "string" ? body.stage.trim() : "";
+        if (!jobId || !UUID_RE.test(jobId) || !stage) {
+          return json(400, { error: "valid UUID job_id and stage required" });
+        }
+        try {
+          const checkRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?id=eq.${encodeURIComponent(jobId)}&select=user_id&limit=1`,
+            { headers: svcHeaders },
+          );
+          if (checkRes.ok) {
+            const checkRows = (await checkRes.json()) as Array<{ user_id?: string }>;
+            if (checkRows[0]?.user_id && !pcScope.owners.includes(checkRows[0].user_id.toLowerCase())) {
+              return json(403, { error: "job belongs to user outside PC_OWNER_USER_IDS" });
+            }
+          }
+          const cleanStage = stage.slice(0, 64);
+          const patchBody: Record<string, unknown> = {
+            stage: cleanStage,
+            last_error: cleanStage !== "done" ? `stage:${cleanStage}` : "",
+          };
+          if (typeof body?.video_id === "string" && body.video_id) {
+            patchBody.video_id = body.video_id;
+          }
+          if (typeof body?.duration === "number" && Number.isFinite(body.duration) && body.duration > 0) {
+            patchBody.duration = Math.round(body.duration * 100) / 100;
+          }
+          const patchRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?id=eq.${encodeURIComponent(jobId)}`,
+            {
+              method: "PATCH",
+              headers: svcHeaders,
+              body: JSON.stringify(patchBody),
+            },
+          );
+          if (!patchRes.ok) return json(502, { error: `remote job stage failed: ${patchRes.status}` });
+          return json(200, { ok: true });
+        } catch (e) {
+          return json(502, { error: `remote job stage failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (url.pathname === "/sync/pc/remote-jobs/finish") {
+        const body = await readJson<{ job_id?: string; status?: string; video_id?: string; error?: string }>(request);
+        const jobId = typeof body?.job_id === "string" ? body.job_id.trim() : "";
+        const status = typeof body?.status === "string" ? body.status.trim() : "";
+        if (!jobId || !UUID_RE.test(jobId) || !status) {
+          return json(400, { error: "valid UUID job_id and status required" });
+        }
+        try {
+          const checkRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/processing_jobs?id=eq.${encodeURIComponent(jobId)}&select=user_id&limit=1`,
+            { headers: svcHeaders },
+          );
+          if (checkRes.ok) {
+            const checkRows = (await checkRes.json()) as Array<{ user_id?: string }>;
+            if (checkRows[0]?.user_id && !pcScope.owners.includes(checkRows[0].user_id.toLowerCase())) {
+              return json(403, { error: "job belongs to user outside PC_OWNER_USER_IDS" });
+            }
+          }
+          await rpcRaw(env, "cloud_finish_job", {
+            p_job_id: jobId,
+            p_status: status,
+            p_video_id: typeof body?.video_id === "string" ? body.video_id : "",
+            p_error: typeof body?.error === "string" ? body.error.slice(0, 500) : "",
+          });
+          return json(200, { ok: true });
+        } catch (e) {
+          return json(502, { error: `remote job finish failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (url.pathname === "/sync/pc/remote-jobs/stage-by-video") {
+        const body = await readJson<{ video_id?: string; stage?: string }>(request);
+        const videoId = typeof body?.video_id === "string" ? body.video_id.trim() : "";
+        const stage = typeof body?.stage === "string" ? body.stage.trim() : "";
+        if (!videoId || !stage) return json(400, { error: "video_id and stage required" });
+        const ownerFilter = pcScope.scopedUserId
+          ? `eq.${pcScope.scopedUserId}`
+          : `in.(${pcScope.owners.join(",")})`;
+        const cleanStage = stage.slice(0, 64);
+        const res = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=${ownerFilter}&video_id=eq.${encodeURIComponent(videoId)}&status=neq.failed`,
+          {
+            method: "PATCH",
+            headers: svcHeaders,
+            body: JSON.stringify({
+              stage: cleanStage,
+              last_error: cleanStage !== "done" ? `stage:${cleanStage}` : "",
+            }),
+          },
+        );
+        if (!res.ok) return json(502, { error: `stage-by-video update failed: ${res.status}` });
+        return json(200, { ok: true });
+      }
+
+      if (url.pathname === "/sync/pc/remote-jobs/title-by-video") {
+        const body = await readJson<{ video_id?: string; title?: string }>(request);
+        const videoId = typeof body?.video_id === "string" ? body.video_id.trim() : "";
+        const title = typeof body?.title === "string" ? body.title.trim() : "";
+        if (!videoId || !title) return json(400, { error: "video_id and title required" });
+        const ownerFilter = pcScope.scopedUserId
+          ? `eq.${pcScope.scopedUserId}`
+          : `in.(${pcScope.owners.join(",")})`;
+        const res = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/processing_jobs?user_id=${ownerFilter}&video_id=eq.${encodeURIComponent(videoId)}`,
+          {
+            method: "PATCH",
+            headers: svcHeaders,
+            body: JSON.stringify({ source_title: title.slice(0, 200) }),
+          },
+        );
+        if (!res.ok) return json(502, { error: `title-by-video update failed: ${res.status}` });
+        return json(200, { ok: true });
+      }
+
+      if (url.pathname === "/sync/pc/remote-jobs/account-for-video") {
+        const body = await readJson<{ video_id?: string; user_id?: string | null }>(request);
+        const videoId = typeof body?.video_id === "string" ? body.video_id.trim() : "";
+        if (!videoId) return json(400, { error: "video_id required" });
+        const reqUserId = typeof body?.user_id === "string" && UUID_RE.test(body.user_id.trim())
+          ? body.user_id.trim().toLowerCase()
+          : pcScope.scopedUserId;
+        if (reqUserId && !pcScope.owners.includes(reqUserId)) {
+          return json(403, { error: "user_id outside PC_OWNER_USER_IDS" });
+        }
+        const userFilter = reqUserId ? `eq.${reqUserId}` : `in.(${pcScope.owners.join(",")})`;
+        const pubRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/publications?user_id=${userFilter}&remote_id=eq.${encodeURIComponent(videoId)}&platform=eq.youtube&select=account_id&limit=1`,
+          { headers: svcHeaders },
+        );
+        if (pubRes.ok) {
+          const pubRows = (await pubRes.json()) as Array<{ account_id?: string }>;
+          if (pubRows[0]?.account_id) {
+            return json(200, { account_id: pubRows[0].account_id });
+          }
+        }
+        if (reqUserId) {
+          const accRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/connected_accounts?user_id=eq.${reqUserId}&provider=eq.youtube&select=account_id,id&limit=2`,
+            { headers: svcHeaders },
+          );
+          if (accRes.ok) {
+            const accRows = (await accRes.json()) as Array<{ account_id?: string; id?: string }>;
+            if (accRows.length === 1) {
+              return json(200, { account_id: accRows[0].account_id || accRows[0].id || null });
+            }
+          }
+        }
+        return json(200, { account_id: null });
+      }
+
+      return json(404, { error: "not found" });
+    }
+
     const actor = await authenticate(env, request);
     if (!actor) return json(401, { error: "unauthorized" });
     const userId = actor.userId;
@@ -3586,14 +4718,18 @@ export default {
           }
         } catch {}
 
-        // Edge-signed fast-stream ticket: eliminates all database/auth latency on every byte-range chunk
+        // Edge-signed fast-stream ticket bound to media_object_id via AAD
         const ticketPayload = {
           k: obj.final_key,
           u: userId,
           m: obj.mime_type || "video/mp4",
           e: Date.now() + (24 * 3600 * 1000),
         };
-        const streamSig = await encryptToken(env.TOKEN_VAULT_KEY, JSON.stringify(ticketPayload));
+        const streamSig = await encryptToken(
+          env.TOKEN_VAULT_KEY,
+          JSON.stringify(ticketPayload),
+          `media_stream|${body.media_object_id}`,
+        );
 
         return json(200, {
           url: `${url.origin}/media/${body.media_object_id}/stream?sig=${encodeURIComponent(streamSig)}`,
@@ -3906,6 +5042,118 @@ export default {
           return json(400, { error: "title required" });
         }
 
+        const clipRef = body.clip_id.trim();
+        const svcHeaders = {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        };
+
+        // Enforce authenticated caller ownership of clip_id (never enqueue for foreign clips).
+        const clipLookupUrl = new URL(`${env.SUPABASE_URL}/rest/v1/clips_cloud`);
+        clipLookupUrl.searchParams.set("user_id", `eq.${userId}`);
+        if (UUID_RE.test(clipRef)) {
+          clipLookupUrl.searchParams.set("or", `(id.eq.${clipRef},local_clip_id.eq.${clipRef})`);
+        } else {
+          clipLookupUrl.searchParams.set("local_clip_id", `eq.${clipRef}`);
+        }
+        clipLookupUrl.searchParams.set("select", "id,user_id,local_clip_id,media_object_id");
+        clipLookupUrl.searchParams.set("limit", "1");
+        const clipRes = await fetch(clipLookupUrl.toString(), { headers: svcHeaders });
+        if (!clipRes.ok) {
+          return json(502, { error: `clip ownership lookup failed: ${clipRes.status}` });
+        }
+        const clipRows = (await clipRes.json()) as Array<{
+          id: string;
+          user_id?: string;
+          local_clip_id?: string;
+          media_object_id?: string | null;
+        }>;
+        const ownedClip = clipRows[0];
+        if (!ownedClip || (ownedClip.user_id && ownedClip.user_id !== userId)) {
+          return json(403, { error: "forbidden: clip_id is not owned by authenticated caller" });
+        }
+
+        // Enforce owned final/${userId}/ R2 prefix & kind === 'clip_video' (never publish
+        // foreign objects, thumbnails, or raw edit_window proxies).
+        const expectedFinalPrefix = `final/${userId}/`;
+        const requestedR2Key = typeof body.r2_key === "string" ? body.r2_key.trim() : "";
+        let verifiedR2Key: string | null = null;
+
+        if (requestedR2Key) {
+          if (requestedR2Key.includes("..") || !requestedR2Key.startsWith(expectedFinalPrefix)) {
+            return json(403, { error: "forbidden: r2_key must belong to authenticated user's final prefix" });
+          }
+          const moUrl = new URL(`${env.SUPABASE_URL}/rest/v1/media_objects`);
+          moUrl.searchParams.set("user_id", `eq.${userId}`);
+          moUrl.searchParams.set("final_key", `eq.${requestedR2Key}`);
+          moUrl.searchParams.set("status", "eq.active");
+          moUrl.searchParams.set("select", "id,user_id,clip_id,kind,final_key");
+          moUrl.searchParams.set("limit", "2");
+          const moRes = await fetch(moUrl.toString(), { headers: svcHeaders });
+          if (!moRes.ok) {
+            return json(502, { error: `media verification failed: ${moRes.status}` });
+          }
+          const moRows = (await moRes.json()) as Array<{
+            id: string;
+            user_id?: string;
+            clip_id?: string | null;
+            kind?: string;
+            final_key?: string | null;
+          }>;
+          const mo = moRows[0];
+          if (!mo || (mo.user_id && mo.user_id !== userId) || !mo.final_key) {
+            return json(403, { error: "forbidden: r2_key does not match an active owned media object" });
+          }
+          if (mo.kind !== "clip_video") {
+            return json(422, { error: `only rendered clip_video assets can be published (got ${mo.kind ?? "unknown"})` });
+          }
+          if (mo.clip_id && mo.clip_id !== ownedClip.id) {
+            return json(403, { error: "forbidden: r2_key belongs to a different clip" });
+          }
+          verifiedR2Key = mo.final_key;
+        } else {
+          const moUrl = new URL(`${env.SUPABASE_URL}/rest/v1/media_objects`);
+          moUrl.searchParams.set("user_id", `eq.${userId}`);
+          moUrl.searchParams.set("status", "eq.active");
+          moUrl.searchParams.set("kind", "eq.clip_video");
+          moUrl.searchParams.set("clip_id", `eq.${ownedClip.id}`);
+          moUrl.searchParams.set("order", "created_at.desc");
+          moUrl.searchParams.set("limit", "1");
+          moUrl.searchParams.set("select", "id,user_id,kind,final_key");
+          const moRes = await fetch(moUrl.toString(), { headers: svcHeaders });
+          if (!moRes.ok) {
+            return json(502, { error: `media lookup failed: ${moRes.status}` });
+          }
+          let moRows = (await moRes.json()) as Array<{
+            id: string;
+            user_id?: string;
+            kind?: string;
+            final_key?: string | null;
+          }>;
+          if (moRows.length === 0 && ownedClip.media_object_id) {
+            const directMoUrl = new URL(`${env.SUPABASE_URL}/rest/v1/media_objects`);
+            directMoUrl.searchParams.set("id", `eq.${ownedClip.media_object_id}`);
+            directMoUrl.searchParams.set("user_id", `eq.${userId}`);
+            directMoUrl.searchParams.set("status", "eq.active");
+            directMoUrl.searchParams.set("kind", "eq.clip_video");
+            directMoUrl.searchParams.set("select", "id,user_id,kind,final_key");
+            directMoUrl.searchParams.set("limit", "1");
+            const directMoRes = await fetch(directMoUrl.toString(), { headers: svcHeaders });
+            if (directMoRes.ok) {
+              moRows = (await directMoRes.json()) as typeof moRows;
+            }
+          }
+          const candidate = moRows[0];
+          if (
+            !candidate?.final_key ||
+            candidate.kind !== "clip_video" ||
+            !candidate.final_key.startsWith(expectedFinalPrefix)
+          ) {
+            return json(409, { error: "no rendered clip_video object available for publishing" });
+          }
+          verifiedR2Key = candidate.final_key;
+        }
+
         const rawPlatforms = body.platforms;
         const platformsList = Array.isArray(rawPlatforms)
           ? rawPlatforms
@@ -3915,12 +5163,12 @@ export default {
         try {
           const rows = await rpcRaw(env, "cloud_enqueue_publishing_job", {
             p_user_id: userId,
-            p_clip_id: body.clip_id.trim(),
+            p_clip_id: ownedClip.id,
             p_title: body.title.trim().slice(0, 100),
             p_description: typeof body.description === "string" ? body.description.trim().slice(0, 5000) : "",
             p_platforms: platformsList,
             p_publish_mode: publishMode,
-            p_r2_key: body.r2_key ?? null,
+            p_r2_key: verifiedR2Key,
             p_rendered_fingerprint: body.rendered_fingerprint ?? null,
           });
 
@@ -3930,7 +5178,8 @@ export default {
             ok: true,
             job_id: job?.id,
             status: job?.status ?? "queued",
-            clip_id: body.clip_id.trim(),
+            clip_id: ownedClip.id,
+            r2_key: verifiedR2Key,
             platforms: platformsList,
           });
         } catch (e) {
@@ -3940,15 +5189,39 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/publish/status/")) {
-        const targetClipId = decodeURIComponent(url.pathname.slice("/publish/status/".length));
+        const targetClipId = decodeURIComponent(url.pathname.slice("/publish/status/".length)).trim();
         if (!targetClipId || targetClipId.length > 128) return json(400, { error: "invalid clip id" });
         try {
-          const res = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/publishing_jobs?user_id=eq.${userId}&clip_id=eq.${encodeURIComponent(targetClipId)}&order=created_at.desc&limit=10`,
-            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
-          );
+          const svcHeaders = {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          };
+          const clipLookupUrl = new URL(`${env.SUPABASE_URL}/rest/v1/clips_cloud`);
+          clipLookupUrl.searchParams.set("user_id", `eq.${userId}`);
+          if (UUID_RE.test(targetClipId)) {
+            clipLookupUrl.searchParams.set("or", `(id.eq.${targetClipId},local_clip_id.eq.${targetClipId})`);
+          } else {
+            clipLookupUrl.searchParams.set("local_clip_id", `eq.${targetClipId}`);
+          }
+          clipLookupUrl.searchParams.set("select", "id,local_clip_id");
+          clipLookupUrl.searchParams.set("limit", "1");
+          const clipRes = await fetch(clipLookupUrl.toString(), { headers: svcHeaders });
+          const clipRows = clipRes.ok ? ((await clipRes.json()) as Array<{ id?: string; local_clip_id?: string }>) : [];
+          const resolvedClipId = clipRows[0]?.id ? String(clipRows[0].id) : "";
+
+          const jobUrl = new URL(`${env.SUPABASE_URL}/rest/v1/publishing_jobs`);
+          jobUrl.searchParams.set("user_id", `eq.${userId}`);
+          if (resolvedClipId && resolvedClipId !== targetClipId && /^[A-Za-z0-9._-]+$/.test(targetClipId)) {
+            jobUrl.searchParams.set("clip_id", `in.(${resolvedClipId},${targetClipId})`);
+          } else {
+            jobUrl.searchParams.set("clip_id", `eq.${resolvedClipId || targetClipId}`);
+          }
+          jobUrl.searchParams.set("order", "created_at.desc");
+          jobUrl.searchParams.set("limit", "10");
+
+          const res = await fetch(jobUrl.toString(), { headers: svcHeaders });
           const rows = res.ok ? ((await res.json()) as Array<Record<string, unknown>>) : [];
-          return json(200, { ok: true, clip_id: targetClipId, jobs: Array.isArray(rows) ? rows : [] });
+          return json(200, { ok: true, clip_id: resolvedClipId || targetClipId, jobs: Array.isArray(rows) ? rows : [] });
         } catch (e) {
           return json(502, { error: `publish status fetch failed: ${e instanceof Error ? e.message : e}` });
         }
@@ -3956,54 +5229,67 @@ export default {
 
       // Source video staging URL: returns presigned GET URL for phone to download source video
       // if not available locally, enabling true phone-only editing and rendering.
+      // Never serves kind='thumbnail'; prefers edit_window proxy or clip_video, owned by caller.
       if (request.method === "GET" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/source-url")) {
         const localClipId = decodeURIComponent(url.pathname.slice("/clips/".length, -"/source-url".length));
         if (!localClipId || localClipId.length > 128) return json(400, { error: "invalid clip id" });
         try {
           const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
-          let mediaObj: { id: string; final_key: string | null; byte_count: number | null; mime_type: string } | null = null;
-          const directRes = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&clip_id=eq.${encodeURIComponent(localClipId)}&order=created_at.desc&limit=1`,
-            { headers: svc }
-          );
-          if (directRes.ok) {
-            const rows = (await directRes.json()) as typeof mediaObj[];
-            if (rows && rows.length > 0 && rows[0].final_key) {
-              mediaObj = rows[0];
+          type SourceMediaRow = { id: string; kind?: string; final_key: string | null; byte_count: number | null; mime_type: string; user_id?: string };
+          const pickSourceMediaObj = (rows: SourceMediaRow[]): SourceMediaRow | null => {
+            const valid = (Array.isArray(rows) ? rows : []).filter(
+              (r) => r && r.final_key && r.kind !== "thumbnail" && (!r.user_id || r.user_id === userId),
+            );
+            return (
+              valid.find((r) => r.kind === "edit_window")
+              ?? valid.find((r) => r.kind === "clip_video")
+              ?? valid[0]
+              ?? null
+            );
+          };
+
+          let mediaObj: SourceMediaRow | null = null;
+          if (UUID_RE.test(localClipId)) {
+            const directRes = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=neq.thumbnail&clip_id=eq.${encodeURIComponent(localClipId)}&select=id,kind,final_key,byte_count,mime_type,user_id&order=created_at.desc&limit=10`,
+              { headers: svc },
+            );
+            if (directRes.ok) {
+              mediaObj = pickSourceMediaObj((await directRes.json()) as SourceMediaRow[]);
             }
           }
 
           if (!mediaObj) {
-            const clipRes = await fetch(
-              `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(id.eq.${encodeURIComponent(localClipId)},local_clip_id.eq.${encodeURIComponent(localClipId)})&select=id,media_object_id&limit=1`,
-              { headers: svc }
-            );
+            const clipLookup = new URL(`${env.SUPABASE_URL}/rest/v1/clips_cloud`);
+            clipLookup.searchParams.set("user_id", `eq.${userId}`);
+            if (UUID_RE.test(localClipId)) {
+              clipLookup.searchParams.set("or", `(id.eq.${localClipId},local_clip_id.eq.${localClipId})`);
+            } else {
+              clipLookup.searchParams.set("local_clip_id", `eq.${localClipId}`);
+            }
+            clipLookup.searchParams.set("select", "id,media_object_id");
+            clipLookup.searchParams.set("limit", "1");
+            const clipRes = await fetch(clipLookup.toString(), { headers: svc });
             if (clipRes.ok) {
               const clipRows = (await clipRes.json()) as Array<{ id: string; media_object_id: string | null }>;
               if (clipRows && clipRows.length > 0) {
                 const clipRow = clipRows[0];
-                if (clipRow.media_object_id) {
+                if (clipRow.id) {
                   const moRes = await fetch(
-                    `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${clipRow.media_object_id}&status=eq.active&select=id,final_key,byte_count,mime_type&limit=1`,
-                    { headers: svc }
+                    `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&kind=neq.thumbnail&clip_id=eq.${encodeURIComponent(clipRow.id)}&select=id,kind,final_key,byte_count,mime_type,user_id&order=created_at.desc&limit=10`,
+                    { headers: svc },
                   );
                   if (moRes.ok) {
-                    const moRows = (await moRes.json()) as typeof mediaObj[];
-                    if (moRows && moRows.length > 0 && moRows[0].final_key) {
-                      mediaObj = moRows[0];
-                    }
+                    mediaObj = pickSourceMediaObj((await moRes.json()) as SourceMediaRow[]);
                   }
                 }
-                if (!mediaObj && clipRow.id) {
+                if (!mediaObj && clipRow.media_object_id) {
                   const moRes = await fetch(
-                    `${env.SUPABASE_URL}/rest/v1/media_objects?user_id=eq.${userId}&status=eq.active&clip_id=eq.${clipRow.id}&order=created_at.desc&limit=1`,
-                    { headers: svc }
+                    `${env.SUPABASE_URL}/rest/v1/media_objects?id=eq.${encodeURIComponent(clipRow.media_object_id)}&user_id=eq.${userId}&status=eq.active&kind=neq.thumbnail&select=id,kind,final_key,byte_count,mime_type,user_id&limit=1`,
+                    { headers: svc },
                   );
                   if (moRes.ok) {
-                    const moRows = (await moRes.json()) as typeof mediaObj[];
-                    if (moRows && moRows.length > 0 && moRows[0].final_key) {
-                      mediaObj = moRows[0];
-                    }
+                    mediaObj = pickSourceMediaObj((await moRes.json()) as SourceMediaRow[]);
                   }
                 }
               }
@@ -4845,6 +6131,543 @@ export default {
           return json(200, { user_id: uid || null, reason: uid ? "single_profile" : "no_profiles" });
         } catch (e) {
           return json(502, { error: `owner lookup failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // ---- Scoped PC OAuth / YouTube / Gemini Broker (worker-token + owner allowlist ONLY) ----
+      // PC never holds SUPABASE_SERVICE_ROLE_KEY, DISPATCH_TOKEN_VAULT_KEY, raw refresh_tokens,
+      // YOUTUBE_CLIENT_SECRET, or raw user Gemini API keys.
+      if (request.method === "POST" && url.pathname === "/sync/pc/oauth/access-token") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:oauth:${userId}`, 120, 60_000);
+        if (!rl.allowed) {
+          return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        }
+        const body = await readJson<{
+          provider?: unknown;
+          account_id?: unknown;
+          force_refresh?: unknown;
+          require_source_vault?: unknown;
+        }>(request);
+        const provider = typeof body?.provider === "string" ? body.provider.trim() : "";
+        const accountId = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        if (!provider) return json(400, { error: "provider is required" });
+        try {
+          const tok = await getValidProviderToken(env, {
+            userId,
+            provider,
+            accountId,
+            forceRefresh: body?.force_refresh === true,
+            requireSourceVault: body?.require_source_vault !== false,
+          });
+          if (!tok) {
+            return json(404, { error: `No connected ${provider} account found`, code: "not_connected" });
+          }
+          // Strictly strip refresh_token, user_access_token, client_secret, and any vault secrets.
+          return json(200, {
+            ok: true,
+            provider: tok.provider,
+            account_id: tok.accountId,
+            row_id: tok.rowId,
+            access_token: tok.accessToken,
+            expires_at: tok.expiresAtIso,
+            ttl_seconds: tok.expiresAtMs !== null ? Math.max(0, Math.floor((tok.expiresAtMs - Date.now()) / 1000)) : null,
+            account_name: tok.accountName,
+            account_email: tok.accountEmail,
+            page_id: typeof tok.payload.page_id === "string" ? tok.payload.page_id : null,
+            ig_user_id: typeof tok.payload.ig_user_id === "string" ? tok.payload.ig_user_id : null,
+            author_urn: typeof tok.payload.author_urn === "string" ? tok.payload.author_urn : null,
+            api_base: typeof tok.payload.api_base === "string" ? tok.payload.api_base : null,
+            auth_mode: typeof tok.payload.auth_mode === "string" ? tok.payload.auth_mode : null,
+            username: typeof tok.payload.username === "string" ? tok.payload.username : null,
+            open_id: typeof tok.payload.open_id === "string" ? tok.payload.open_id : null,
+          });
+        } catch (err) {
+          if (err instanceof ProviderAuthError) {
+            return json(err.status, {
+              error: err.message,
+              code: err.code,
+              needs_reauth: err.code === "needs_reauth",
+              provider: err.provider,
+              account_id: err.accountId ?? null,
+            });
+          }
+          return json(502, { error: `oauth broker failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/youtube/channel") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:yt:${userId}`, 120, 60_000);
+        if (!rl.allowed) {
+          return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        }
+        const body = await readJson<{ channel_id?: string | null }>(request);
+        const requestedChannelId = typeof body?.channel_id === "string" ? body.channel_id.trim() : "";
+        const ytChannelRe = /^(UC[A-Za-z0-9_-]{6,}|ch-[A-Za-z0-9_-]+|channel-[A-Za-z0-9_-]+)$/;
+        const lookupUrl = new URL(`${env.SUPABASE_URL}/rest/v1/connected_accounts`);
+        lookupUrl.searchParams.set("user_id", `eq.${userId}`);
+        lookupUrl.searchParams.set("provider", "eq.youtube");
+        lookupUrl.searchParams.set("select", "id,account_id,account_name,account_email,metadata,is_verified");
+        const res = await fetch(lookupUrl.toString(), {
+          headers: {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return json(502, { error: `youtube channel lookup failed: ${res.status}` });
+        const rows = (await res.json()) as Array<{
+          id?: string;
+          account_id?: string | null;
+          account_name?: string | null;
+          account_email?: string | null;
+          metadata?: Record<string, unknown> | null;
+          is_verified?: boolean | null;
+        }>;
+        const resolveChannelId = (r: (typeof rows)[number]): string | null => {
+          const raw = typeof r.account_id === "string" ? r.account_id.trim() : "";
+          const metaCid = r.metadata && typeof r.metadata.channel_id === "string" ? r.metadata.channel_id.trim() : "";
+          if (raw && !raw.includes("@") && !UUID_RE.test(raw) && ytChannelRe.test(raw)) return raw;
+          if (metaCid && !metaCid.includes("@") && !UUID_RE.test(metaCid) && ytChannelRe.test(metaCid)) return metaCid;
+          return null;
+        };
+        const valid = rows
+          .filter((r) => r.is_verified !== false && resolveChannelId(r) !== null)
+          .map((r) => ({
+            row_id: String(r.id || ""),
+            channel_id: String(resolveChannelId(r)),
+            channel_title: String(r.account_name || ""),
+            account_email: String(r.account_email || ""),
+            needs_reauth: r.metadata?.needs_reauth === true,
+          }));
+        if (requestedChannelId) {
+          const hit = valid.find((v) => v.channel_id === requestedChannelId);
+          if (hit) {
+            return json(200, { status: hit.needs_reauth ? "needs_reauth" : "connected", user_id: userId, ...hit, reason: "explicit_channel" });
+          }
+          return json(200, { status: "not_found", user_id: userId, channel_id: null, reason: "channel_not_connected_to_user" });
+        }
+        if (valid.length === 1) {
+          const hit = valid[0];
+          return json(200, { status: hit.needs_reauth ? "needs_reauth" : "connected", user_id: userId, ...hit, reason: "single_connected_channel" });
+        }
+        if (valid.length > 1) {
+          return json(200, {
+            status: "ambiguous_owner",
+            user_id: userId,
+            channel_id: null,
+            channels: valid,
+            reason: "multiple_channels_require_explicit_selection",
+          });
+        }
+        if (rows.length > 0) {
+          const rawLegacyId = String(rows[0].account_id || "").trim();
+          const legacyType = rawLegacyId.includes("@") ? "email" : (UUID_RE.test(rawLegacyId) ? "UUID" : "legacy");
+          return json(200, {
+            status: "legacy_reauth_required",
+            user_id: userId,
+            channel_id: rawLegacyId || null,
+            account_name: String(rows[0].account_name || ""),
+            account_email: String(rows[0].account_email || ""),
+            row_id: String(rows[0].id || ""),
+            legacy_id_type: legacyType,
+            reason: "legacy_account_needs_reconnect",
+          });
+        }
+        return json(200, { status: "not_found", user_id: userId, channel_id: null, reason: "no_connected_youtube_account" });
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/youtube/reconcile") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:yt:${userId}`, 120, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{ account_id?: string; idempotency_key?: string; max_results?: number }>(request);
+        const accountId = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        const idempotencyKey = typeof body?.idempotency_key === "string" ? body.idempotency_key.trim() : "";
+        if (!idempotencyKey) return json(400, { error: "idempotency_key required" });
+        const maxResults = Math.min(10, Math.max(1, Number(body?.max_results ?? 5) || 5));
+        try {
+          let tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, requireSourceVault: false });
+          if (!tok) return json(404, { error: "No connected YouTube account", code: "not_connected" });
+          const searchUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+          searchUrl.searchParams.set("part", "snippet");
+          searchUrl.searchParams.set("forMine", "true");
+          searchUrl.searchParams.set("type", "video");
+          searchUrl.searchParams.set("q", `dispatch_idempotency_key:${idempotencyKey}`);
+          searchUrl.searchParams.set("maxResults", String(maxResults));
+          let ytRes = await fetch(searchUrl.toString(), {
+            headers: { Authorization: `Bearer ${tok.accessToken}` },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (ytRes.status === 401) {
+            tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, forceRefresh: true, requireSourceVault: false });
+            if (tok) {
+              ytRes = await fetch(searchUrl.toString(), {
+                headers: { Authorization: `Bearer ${tok.accessToken}` },
+                signal: AbortSignal.timeout(8000),
+              });
+            }
+          }
+          if (!ytRes.ok) {
+            return json(502, { error: `youtube reconcile upstream failed: ${ytRes.status}` });
+          }
+          const ytData = (await ytRes.json()) as { items?: unknown[] };
+          return json(200, { ok: true, items: Array.isArray(ytData.items) ? ytData.items : [] });
+        } catch (err) {
+          if (err instanceof ProviderAuthError) {
+            return json(err.status, { error: err.message, code: err.code, needs_reauth: err.code === "needs_reauth" });
+          }
+          return json(502, { error: `youtube reconcile failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/youtube/status") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:yt:${userId}`, 120, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{ account_id?: string | null; video_ids?: string[] }>(request);
+        const ids = Array.isArray(body?.video_ids)
+          ? body.video_ids.map((v) => String(v || "").trim()).filter((v) => /^[A-Za-z0-9_-]{6,20}$/.test(v)).slice(0, 50)
+          : [];
+        if (ids.length === 0) return json(200, { ok: true, videos: {} });
+        const accountId = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        try {
+          let tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, requireSourceVault: false });
+          if (!tok) return json(404, { error: "No connected YouTube account", code: "not_connected" });
+          const videosUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+          videosUrl.searchParams.set("part", "snippet,status,processingDetails,contentDetails");
+          videosUrl.searchParams.set("id", ids.join(","));
+          let ytRes = await fetch(videosUrl.toString(), {
+            headers: { Authorization: `Bearer ${tok.accessToken}` },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (ytRes.status === 401) {
+            tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, forceRefresh: true, requireSourceVault: false });
+            if (tok) {
+              ytRes = await fetch(videosUrl.toString(), {
+                headers: { Authorization: `Bearer ${tok.accessToken}` },
+                signal: AbortSignal.timeout(8000),
+              });
+            }
+          }
+          if (!ytRes.ok) {
+            return json(502, { error: `youtube videos status failed: ${ytRes.status}` });
+          }
+          const ytJson = (await ytRes.json()) as { items?: Array<Record<string, unknown>> };
+          const videos: Record<string, unknown> = {};
+          for (const item of ytJson.items || []) {
+            const vid = typeof item.id === "string" ? item.id : "";
+            if (!vid) continue;
+            const statusObj = (item.status || {}) as Record<string, unknown>;
+            const procObj = (item.processingDetails || {}) as Record<string, unknown>;
+            const snippetObj = (item.snippet || {}) as Record<string, unknown>;
+            const prog = (procObj.processingProgress || {}) as Record<string, unknown>;
+            const total = Number(prog.partsTotal || 0);
+            const processed = Number(prog.partsProcessed || 0);
+            const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : null;
+            videos[vid] = {
+              video_id: vid,
+              privacy_status: statusObj.privacyStatus ?? null,
+              upload_status: statusObj.uploadStatus ?? null,
+              rejection_reason: statusObj.rejectionReason ?? null,
+              failure_reason: statusObj.failureReason ?? null,
+              processing_status: procObj.processingStatus ?? null,
+              processing_progress: pct,
+              published_at: snippetObj.publishedAt ?? null,
+              title: snippetObj.title ?? null,
+              status: statusObj,
+              processingDetails: procObj,
+              contentDetails: item.contentDetails ?? {},
+            };
+          }
+          return json(200, { ok: true, videos });
+        } catch (err) {
+          if (err instanceof ProviderAuthError) {
+            return json(err.status, { error: err.message, code: err.code, needs_reauth: err.code === "needs_reauth" });
+          }
+          return json(502, { error: `youtube status failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/youtube/upload-session") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:yt:${userId}`, 60, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{
+          account_id?: string;
+          metadata?: Record<string, unknown>;
+          content_length?: number;
+          content_type?: string;
+        }>(request);
+        const accountId = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        if (!body?.metadata || typeof body.metadata !== "object") {
+          return json(400, { error: "metadata object is required" });
+        }
+        try {
+          const tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, requireSourceVault: false });
+          if (!tok) return json(404, { error: "No connected YouTube account", code: "not_connected" });
+          const reqHeaders: Record<string, string> = {
+            Authorization: `Bearer ${tok.accessToken}`,
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": typeof body.content_type === "string" ? body.content_type : "video/mp4",
+          };
+          if (typeof body.content_length === "number" && body.content_length > 0) {
+            reqHeaders["X-Upload-Content-Length"] = String(Math.round(body.content_length));
+          }
+          const initRes = await fetch(
+            "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+            {
+              method: "POST",
+              headers: reqHeaders,
+              body: JSON.stringify(body.metadata),
+              signal: AbortSignal.timeout(12000),
+            },
+          );
+          if (!initRes.ok) {
+            return json(502, { error: `youtube resumable init failed: ${initRes.status}` });
+          }
+          const uploadUrl = initRes.headers.get("Location") || initRes.headers.get("location");
+          if (!uploadUrl) return json(502, { error: "youtube resumable init missing Location header" });
+          return json(200, { ok: true, upload_url: uploadUrl });
+        } catch (err) {
+          if (err instanceof ProviderAuthError) {
+            return json(err.status, { error: err.message, code: err.code, needs_reauth: err.code === "needs_reauth" });
+          }
+          return json(502, { error: `youtube upload session failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/youtube/snippet") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:yt:${userId}`, 60, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{
+          account_id?: string;
+          video_id?: string;
+          title?: string;
+          description?: string;
+          category_id?: string;
+        }>(request);
+        const videoId = typeof body?.video_id === "string" ? body.video_id.trim() : "";
+        if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId) || typeof body?.title !== "string" || !body.title.trim()) {
+          return json(400, { error: "valid video_id and title are required" });
+        }
+        const accountId = typeof body?.account_id === "string" ? body.account_id.trim() : "";
+        try {
+          const tok = await getValidProviderToken(env, { userId, provider: "youtube", accountId, requireSourceVault: false });
+          if (!tok) return json(404, { error: "No connected YouTube account", code: "not_connected" });
+          const authHdr = { Authorization: `Bearer ${tok.accessToken}` };
+          const curRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`, {
+            headers: authHdr,
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!curRes.ok) return json(502, { error: `youtube snippet fetch failed: ${curRes.status}` });
+          const curJson = (await curRes.json()) as { items?: Array<{ snippet?: Record<string, unknown> }> };
+          const existing = curJson.items?.[0]?.snippet;
+          if (!existing) return json(404, { error: "video not found on YouTube" });
+          const updatedSnippet = {
+            ...existing,
+            title: body.title.trim().slice(0, 100),
+            description: typeof body.description === "string" ? body.description.slice(0, 5000) : (existing.description ?? ""),
+            categoryId: typeof body.category_id === "string" && body.category_id ? body.category_id : (existing.categoryId ?? "22"),
+          };
+          const putRes = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet", {
+            method: "PUT",
+            headers: { ...authHdr, "Content-Type": "application/json" },
+            body: JSON.stringify({ id: videoId, snippet: updatedSnippet }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!putRes.ok) return json(502, { error: `youtube snippet update failed: ${putRes.status}` });
+          return json(200, { ok: true, video_id: videoId });
+        } catch (err) {
+          if (err instanceof ProviderAuthError) {
+            return json(err.status, { error: err.message, code: err.code, needs_reauth: err.code === "needs_reauth" });
+          }
+          return json(502, { error: `youtube snippet failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/disconnect") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        try {
+          await rpcRaw(env, "cloud_delete_refresh_token", { p_user_id: userId });
+          for (const k of providerTokenCache.keys()) {
+            if (k.startsWith(`${userId}:`)) providerTokenCache.delete(k);
+          }
+          return json(200, { ok: true });
+        } catch (e) {
+          return json(502, { error: `disconnect failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "GET" && url.pathname === "/sync/pc/gemini/status") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:gemini:${userId}`, 120, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        try {
+          const { apiKey, keyPrefix } = await getDecryptedUserGeminiKey(env, userId);
+          return json(200, { configured: Boolean(apiKey), key_prefix: keyPrefix });
+        } catch (e) {
+          return json(502, { error: `gemini status check failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/gemini/upload") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:gemini:${userId}`, 60, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{
+          mime_type?: string;
+          num_bytes?: number;
+          display_name?: string;
+        }>(request);
+        const mimeType = typeof body?.mime_type === "string" && body.mime_type.trim() ? body.mime_type.trim() : "video/mp4";
+        const numBytes = Number(body?.num_bytes ?? 0);
+        if (!Number.isFinite(numBytes) || numBytes <= 0) {
+          return json(400, { error: "num_bytes > 0 is required" });
+        }
+        try {
+          const { apiKey } = await getDecryptedUserGeminiKey(env, userId);
+          if (!apiKey) return json(404, { error: "Gemini key not configured", code: "gemini_key_missing" });
+          const startRes = await fetch("https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=resumable", {
+            method: "POST",
+            headers: {
+              "x-goog-api-key": apiKey,
+              "X-Goog-Upload-Protocol": "resumable",
+              "X-Goog-Upload-Command": "start",
+              "X-Goog-Upload-Header-Content-Length": String(Math.round(numBytes)),
+              "X-Goog-Upload-Header-Content-Type": mimeType,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ file: { display_name: typeof body?.display_name === "string" ? body.display_name.slice(0, 128) : "dispatch_media" } }),
+            signal: AbortSignal.timeout(12000),
+          });
+          if (!startRes.ok) {
+            return json(502, { error: `gemini resumable upload init failed: ${startRes.status}` });
+          }
+          const uploadUrl = startRes.headers.get("x-goog-upload-url") || startRes.headers.get("X-Goog-Upload-URL");
+          if (!uploadUrl) return json(502, { error: "gemini upload init missing upload url" });
+          return json(200, { ok: true, upload_url: uploadUrl });
+        } catch (e) {
+          return json(502, { error: `gemini upload init failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "GET" && url.pathname === "/sync/pc/gemini/file-status") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:gemini:${userId}`, 120, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const fileName = (url.searchParams.get("name") || "").trim();
+        if (!/^files\/[a-zA-Z0-9._-]+$/.test(fileName)) {
+          return json(400, { error: "invalid gemini file name" });
+        }
+        try {
+          const { apiKey } = await getDecryptedUserGeminiKey(env, userId);
+          if (!apiKey) return json(404, { error: "Gemini key not configured", code: "gemini_key_missing" });
+          const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}`, {
+            headers: { "x-goog-api-key": apiKey },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!gRes.ok) return json(502, { error: `gemini file status failed: ${gRes.status}` });
+          return json(200, await gRes.json());
+        } catch (e) {
+          return json(502, { error: `gemini file status error: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "DELETE" && url.pathname === "/sync/pc/gemini/file") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:gemini:${userId}`, 60, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const fileName = (url.searchParams.get("name") || "").trim();
+        if (!/^files\/[a-zA-Z0-9._-]+$/.test(fileName)) {
+          return json(400, { error: "invalid gemini file name" });
+        }
+        try {
+          const { apiKey } = await getDecryptedUserGeminiKey(env, userId);
+          if (!apiKey) return json(404, { error: "Gemini key not configured", code: "gemini_key_missing" });
+          const delRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}`, {
+            method: "DELETE",
+            headers: { "x-goog-api-key": apiKey },
+            signal: AbortSignal.timeout(8000),
+          });
+          return json(delRes.ok ? 200 : 502, { ok: delRes.ok });
+        } catch (e) {
+          return json(502, { error: `gemini file delete error: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/gemini/generate") {
+        if (!isPcWorkerAuth(env, request) || !request.headers.get("X-Dispatch-User-Id")) {
+          return json(403, { error: "PC worker auth required" });
+        }
+        const rl = checkPcBrokerRateLimit(`pc:gemini:${userId}`, 60, 60_000);
+        if (!rl.allowed) return json(429, { error: "rate limit exceeded", retry_after: rl.retryAfterSeconds });
+        const body = await readJson<{
+          model?: string;
+          contents?: unknown;
+          generationConfig?: unknown;
+          systemInstruction?: unknown;
+          safetySettings?: unknown;
+          tools?: unknown;
+        }>(request);
+        if (!body?.contents) return json(400, { error: "contents is required" });
+        const model = typeof body.model === "string" && /^[a-zA-Z0-9._-]{1,80}$/.test(body.model.trim())
+          ? body.model.trim()
+          : "gemini-2.5-flash";
+        try {
+          const { apiKey } = await getDecryptedUserGeminiKey(env, userId);
+          if (!apiKey) return json(404, { error: "Gemini key not configured", code: "gemini_key_missing" });
+          const payload: Record<string, unknown> = { contents: body.contents };
+          if (body.generationConfig !== undefined) payload.generationConfig = body.generationConfig;
+          if (body.systemInstruction !== undefined) payload.systemInstruction = body.systemInstruction;
+          if (body.safetySettings !== undefined) payload.safetySettings = body.safetySettings;
+          if (body.tools !== undefined) payload.tools = body.tools;
+          const gRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+            {
+              method: "POST",
+              headers: {
+                "x-goog-api-key": apiKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(payload),
+              signal: AbortSignal.timeout(45000),
+            },
+          );
+          const respJson = (await gRes.json().catch(() => ({}))) as Record<string, unknown>;
+          if (!gRes.ok) {
+            return json(gRes.status >= 400 && gRes.status < 500 ? gRes.status : 502, {
+              error: `gemini generateContent failed: ${gRes.status}`,
+              upstream: respJson,
+            });
+          }
+          return json(200, respJson);
+        } catch (e) {
+          return json(502, { error: `gemini proxy error: ${e instanceof Error ? e.message : e}` });
         }
       }
 

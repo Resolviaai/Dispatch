@@ -12,14 +12,17 @@ import json
 import time
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
 from dispatch.config import GEMINI_API_KEY, MAX_CLIP_DURATION, PROCESSING_DIR
+from dispatch.orchestrator.recovery import get_job_workspace_dir
 from dispatch.transcription.audio import (
     _probe_audio_duration,
     extract_compressed_audio,
@@ -149,14 +152,38 @@ def _parse_stage1_time(value: Any) -> float:
     return _parse_offset_to_seconds(text)
 
 
-def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> bool:
-    """Check if gemini-3.5-transcribe is within the daily limit and atomically reserve one request."""
+def _ensure_quota_ledger(cursor: Any) -> None:
+    """Ensure the idempotent quota reservation ledger table exists."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transcribe_quota_reservations (
+            request_id TEXT PRIMARY KEY,
+            quota_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+def check_and_increment_daily_transcribe_quota(
+    max_daily_requests: int = 25,
+    request_id: Optional[str] = None,
+) -> bool:
+    """Check if gemini-3.5-transcribe is within the daily limit and atomically reserve one request.
+
+    When `request_id` is supplied, reservations for the current UTC day are idempotent:
+    duplicate reservations while 'reserved' or 'consumed' return True without deducting another slot.
+    """
     import sqlite3
 
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    norm_rid = str(request_id).strip() if request_id else ""
     with db.get_db_connection() as conn:
         cursor = conn.cursor()
         try:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            _ensure_quota_ledger(cursor)
             cursor.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('transcribe_quota_date', ?)",
                 (today_utc,)
@@ -169,12 +196,33 @@ def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> 
             if stored_date_row and stored_date_row["value"] != today_utc:
                 cursor.execute("UPDATE settings SET value = '0' WHERE key = 'transcribe_quota_count'")
                 cursor.execute("UPDATE settings SET value = ? WHERE key = 'transcribe_quota_date'", (today_utc,))
+                cursor.execute("DELETE FROM transcribe_quota_reservations WHERE quota_date != ?", (today_utc,))
+
+            if norm_rid:
+                cursor.execute(
+                    "SELECT quota_date, status FROM transcribe_quota_reservations WHERE request_id = ?",
+                    (norm_rid,),
+                )
+                existing = cursor.fetchone()
+                if existing and existing["quota_date"] == today_utc and existing["status"] in ("reserved", "consumed"):
+                    conn.commit()
+                    return True
+
             cursor.execute(
                 "UPDATE settings SET value = CAST(COALESCE(value, '0') AS INTEGER) + 1 "
                 "WHERE key = 'transcribe_quota_count' AND CAST(COALESCE(value, '0') AS INTEGER) < ?",
                 (max_daily_requests,)
             )
             reserved = cursor.rowcount == 1
+            if reserved and norm_rid:
+                cursor.execute("""
+                    INSERT INTO transcribe_quota_reservations (request_id, quota_date, status, updated_at)
+                    VALUES (?, ?, 'reserved', CURRENT_TIMESTAMP)
+                    ON CONFLICT(request_id) DO UPDATE SET
+                        quota_date = excluded.quota_date,
+                        status = 'reserved',
+                        updated_at = CURRENT_TIMESTAMP
+                """, (norm_rid, today_utc))
             conn.commit()
             return reserved
         except sqlite3.Error as e:
@@ -183,11 +231,43 @@ def check_and_increment_daily_transcribe_quota(max_daily_requests: int = 25) -> 
             return False
 
 
-def refund_daily_transcribe_quota() -> None:
-    """Return a reserved transcribe slot (floor 0) when the request never reached Gemini."""
+def _consume_daily_transcribe_quota(request_id: Optional[str]) -> None:
+    """Lock a reserved quota slot as consumed after primary transcription completes."""
+    norm_rid = str(request_id).strip() if request_id else ""
+    if not norm_rid:
+        return
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with db.get_db_connection() as conn:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
+        _ensure_quota_ledger(cursor)
+        cursor.execute("""
+            UPDATE transcribe_quota_reservations
+            SET status = 'consumed', updated_at = CURRENT_TIMESTAMP
+            WHERE request_id = ? AND quota_date = ? AND status = 'reserved'
+        """, (norm_rid, today_utc))
+        conn.commit()
+
+
+def refund_daily_transcribe_quota(request_id: Optional[str] = None) -> bool:
+    """Return a reserved transcribe slot (floor 0, single-refund max when keyed by request_id)."""
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    norm_rid = str(request_id).strip() if request_id else ""
+    with db.get_db_connection() as conn:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+        if norm_rid:
+            _ensure_quota_ledger(cursor)
+            cursor.execute("""
+                UPDATE transcribe_quota_reservations
+                SET status = 'refunded', updated_at = CURRENT_TIMESTAMP
+                WHERE request_id = ? AND quota_date = ? AND status = 'reserved'
+            """, (norm_rid, today_utc))
+            if cursor.rowcount != 1:
+                conn.commit()
+                return False
         cursor.execute(
             "UPDATE settings SET value = MAX(CAST(value AS INTEGER) - 1, 0) "
             "WHERE key = 'transcribe_quota_count' AND value IS NOT NULL "
@@ -195,7 +275,9 @@ def refund_daily_transcribe_quota() -> None:
             "AND value = ?)",
             (today_utc,)
         )
+        refunded = cursor.rowcount == 1
         conn.commit()
+        return refunded
 
 
 def _group_words_into_segments(words: List[Dict[str, Any]], max_gap_seconds: float = 0.8) -> List[Dict[str, Any]]:
@@ -269,12 +351,14 @@ def _group_words_into_segments(words: List[Dict[str, Any]], max_gap_seconds: flo
 def _transcribe_chunk_primary(
     client: Any,
     audio_part_path: Path,
-    prompt: Optional[str] = None
+    prompt: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Primary: Full transcript generation via gemini-3.5-transcribe with word timestamps."""
     from google.genai import types
 
-    if not check_and_increment_daily_transcribe_quota(max_daily_requests=25):
+    eff_request_id = (str(request_id).strip() if request_id else "") or f"primary:{uuid.uuid4().hex}"
+    if not check_and_increment_daily_transcribe_quota(max_daily_requests=25, request_id=eff_request_id):
         raise RecoverableTranscriptionError("Daily transcribe quota limit (25/25) reached for gemini-3.5-transcribe")
 
     uploaded_file = None
@@ -313,12 +397,13 @@ def _transcribe_chunk_primary(
                         })
 
         if not words and not full_text:
-            refund_daily_transcribe_quota()
+            refund_daily_transcribe_quota(request_id=eff_request_id)
             raise RecoverableTranscriptionError("gemini-3.5-transcribe returned empty transcript")
 
         if not full_text and words:
             full_text = " ".join(w["word"] for w in words)
 
+        _consume_daily_transcribe_quota(eff_request_id)
         segments = _group_words_into_segments(words)
         return {
             "full_text": full_text,
@@ -329,9 +414,9 @@ def _transcribe_chunk_primary(
         }
     except Exception as exc:
         if is_permanent_auth_error(exc):
-            refund_daily_transcribe_quota()
+            refund_daily_transcribe_quota(request_id=eff_request_id)
             raise PermanentAuthError(f"Gemini authentication failed on primary: {exc}") from exc
-        refund_daily_transcribe_quota()
+        refund_daily_transcribe_quota(request_id=eff_request_id)
         raise RecoverableTranscriptionError(f"gemini-3.5-transcribe failed: {exc}") from exc
     finally:
         if uploaded_file is not None:
@@ -468,6 +553,7 @@ def transcribe_media(
     api_key: Optional[str] = None,
     prompt: Optional[str] = None,
     language: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Single canonical transcription interface for Dispatch.
     
@@ -483,71 +569,79 @@ def transcribe_media(
 
     client = get_gemini_client(api_key=api_key)
     is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
+    base_request_id = (str(request_id).strip() if request_id else "") or f"media:{media_path.stem}:{uuid.uuid4().hex[:8]}"
+    job_dir = get_job_workspace_dir(f"transcribe_{media_path.stem}_{uuid.uuid4().hex[:6]}", base_dir=PROCESSING_DIR)
 
-    with tempfile.TemporaryDirectory(prefix="dispatch_transcribe_") as work_dir:
-        work_path = Path(work_dir)
-        audio_path = (
-            extract_compressed_audio(media_path, work_path / "source.mp3")
-            if is_video else media_path
-        )
-        chunks = split_audio_for_transcription(
-            audio_path, work_path / "parts", chunk_seconds=600,
-            overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
-        )
-        logger.info("Transcribing %s as %d bounded audio part(s) using Gemini", media_path.name, len(chunks))
+    try:
+        with tempfile.TemporaryDirectory(prefix="dispatch_transcribe_", dir=str(job_dir)) as work_dir:
+            work_path = Path(work_dir)
+            audio_path = (
+                extract_compressed_audio(media_path, work_path / "source.mp3")
+                if is_video else media_path
+            )
+            chunks = split_audio_for_transcription(
+                audio_path, work_path / "parts", chunk_seconds=600,
+                overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
+            )
+            logger.info("Transcribing %s as %d bounded audio part(s) using Gemini", media_path.name, len(chunks))
 
-        all_segments: List[Dict[str, Any]] = []
-        full_text_pieces: List[str] = []
-        effective_source = "gemini_transcribe"
-        effective_model = "gemini-3.5-transcribe"
+            all_segments: List[Dict[str, Any]] = []
+            full_text_pieces: List[str] = []
+            effective_source = "gemini_transcribe"
+            effective_model = "gemini-3.5-transcribe"
 
-        for part_index, (part_path, source_offset) in enumerate(chunks):
-            chunk_result = None
+            for part_index, (part_path, source_offset) in enumerate(chunks):
+                chunk_result = None
+                part_request_id = f"{base_request_id}:part:{part_index}"
 
-            # 1. Attempt Primary: gemini-3.5-transcribe
-            try:
-                logger.info("Part %d/%d: Calling primary gemini-3.5-transcribe...", part_index + 1, len(chunks))
-                chunk_result = _transcribe_chunk_primary(client, part_path, prompt=prompt)
-            except PermanentAuthError:
-                raise
-            except RecoverableTranscriptionError as primary_err:
-                logger.warning("Part %d/%d: Primary failed (%s). Attempting fallback gemini-3.5-flash-lite...",
-                               part_index + 1, len(chunks), primary_err)
-                # 2. Attempt Fallback: gemini-3.5-flash-lite
+                # 1. Attempt Primary: gemini-3.5-transcribe
                 try:
-                    chunk_result = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
-                    effective_source = "gemini_flash_lite"
-                    effective_model = "gemini-3.5-flash-lite"
+                    logger.info("Part %d/%d: Calling primary gemini-3.5-transcribe...", part_index + 1, len(chunks))
+                    chunk_result = _transcribe_chunk_primary(
+                        client, part_path, prompt=prompt, request_id=part_request_id
+                    )
                 except PermanentAuthError:
                     raise
-                except RecoverableTranscriptionError as fallback_err:
-                    logger.error("Part %d/%d: Fallback also failed: %s", part_index + 1, len(chunks), fallback_err)
-                    raise RecoverableTranscriptionError(
-                        f"Both Gemini transcription providers failed for part {part_index + 1}: "
-                        f"Primary: {primary_err} | Fallback: {fallback_err}"
-                    ) from fallback_err
+                except RecoverableTranscriptionError as primary_err:
+                    logger.warning("Part %d/%d: Primary failed (%s). Attempting fallback gemini-3.5-flash-lite...",
+                                   part_index + 1, len(chunks), primary_err)
+                    # 2. Attempt Fallback: gemini-3.5-flash-lite
+                    try:
+                        chunk_result = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
+                        effective_source = "gemini_flash_lite"
+                        effective_model = "gemini-3.5-flash-lite"
+                    except PermanentAuthError:
+                        raise
+                    except RecoverableTranscriptionError as fallback_err:
+                        logger.error("Part %d/%d: Fallback also failed: %s", part_index + 1, len(chunks), fallback_err)
+                        raise RecoverableTranscriptionError(
+                            f"Both Gemini transcription providers failed for part {part_index + 1}: "
+                            f"Primary: {primary_err} | Fallback: {fallback_err}"
+                        ) from fallback_err
 
-            if not chunk_result:
-                raise RecoverableTranscriptionError(f"No transcription produced for part {part_index + 1}")
+                if not chunk_result:
+                    raise RecoverableTranscriptionError(f"No transcription produced for part {part_index + 1}")
 
-            if chunk_result.get("full_text"):
-                full_text_pieces.append(chunk_result["full_text"])
+                if chunk_result.get("full_text"):
+                    full_text_pieces.append(chunk_result["full_text"])
 
-            for seg in chunk_result.get("segments", []):
-                seg_copy = dict(seg)
-                seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
-                seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
-                seg_copy["_source_part_index"] = part_index
-                if "words" in seg_copy:
-                    seg_copy["words"] = [
-                        {
-                            **w,
-                            "start": round(w["start"] + source_offset, 3),
-                            "end": round(w["end"] + source_offset, 3),
-                        }
-                        for w in seg_copy["words"]
-                    ]
-                all_segments.append(seg_copy)
+                for seg in chunk_result.get("segments", []):
+                    seg_copy = dict(seg)
+                    seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
+                    seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
+                    seg_copy["_source_part_index"] = part_index
+                    if "words" in seg_copy:
+                        seg_copy["words"] = [
+                            {
+                                **w,
+                                "start": round(w["start"] + source_offset, 3),
+                                "end": round(w["end"] + source_offset, 3),
+                            }
+                            for w in seg_copy["words"]
+                        ]
+                    all_segments.append(seg_copy)
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
     # Deduplicate overlapping segments at part seams
     deduped_segments = _deduplicate_overlapping_segments(
@@ -624,32 +718,37 @@ def transcribe_stage1_flash_lite(
     """Backward compatibility helper for coarse transcription (uses fallback flash-lite)."""
     client = get_gemini_client(api_key=api_key)
     is_video = media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm")
-    with tempfile.TemporaryDirectory(prefix="dispatch_stage1_") as work_dir:
-        work_path = Path(work_dir)
-        audio_path = (
-            extract_compressed_audio(media_path, work_path / "source.mp3")
-            if is_video else media_path
-        )
-        chunks = split_audio_for_transcription(
-            audio_path, work_path / "parts", chunk_seconds=600,
-            overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
-        )
-        all_segments = []
-        for part_index, (part_path, source_offset) in enumerate(chunks):
-            res = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
-            for seg in res.get("segments", []):
-                seg_copy = dict(seg)
-                seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
-                seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
-                seg_copy["_source_part_index"] = part_index
-                all_segments.append(seg_copy)
+    job_dir = get_job_workspace_dir(f"stage1_{media_path.stem}_{uuid.uuid4().hex[:6]}", base_dir=PROCESSING_DIR)
+    try:
+        with tempfile.TemporaryDirectory(prefix="dispatch_stage1_", dir=str(job_dir)) as work_dir:
+            work_path = Path(work_dir)
+            audio_path = (
+                extract_compressed_audio(media_path, work_path / "source.mp3")
+                if is_video else media_path
+            )
+            chunks = split_audio_for_transcription(
+                audio_path, work_path / "parts", chunk_seconds=600,
+                overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS,
+            )
+            all_segments = []
+            for part_index, (part_path, source_offset) in enumerate(chunks):
+                res = _transcribe_chunk_fallback(client, part_path, prompt=prompt)
+                for seg in res.get("segments", []):
+                    seg_copy = dict(seg)
+                    seg_copy["start"] = round(seg_copy["start"] + source_offset, 3)
+                    seg_copy["end"] = round(seg_copy["end"] + source_offset, 3)
+                    seg_copy["_source_part_index"] = part_index
+                    all_segments.append(seg_copy)
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
     return _deduplicate_overlapping_segments(all_segments, overlap_seconds=STAGE1_WINDOW_OVERLAP_SECONDS)
 
 
 def transcribe_stage2_precision_words(
     media_path: Path,
     max_input_seconds: Optional[float] = None,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Precision word-level alignment for cut clip audio (primary: transcribe, fallback: flash-lite)."""
     max_stage2_seconds = max_input_seconds if max_input_seconds else MAX_CLIP_DURATION + 16.0
@@ -674,9 +773,10 @@ def transcribe_stage2_precision_words(
         audio_path = media_path
         cleanup = False
 
+    eff_request_id = (str(request_id).strip() if request_id else "") or f"stage2:{uuid.uuid4().hex}"
     try:
         try:
-            res = _transcribe_chunk_primary(client, audio_path)
+            res = _transcribe_chunk_primary(client, audio_path, request_id=eff_request_id)
         except RecoverableTranscriptionError:
             res = _transcribe_chunk_fallback(client, audio_path)
 
@@ -775,6 +875,7 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             logger.warning("Cannot drain queued clip %s: source video not found on disk", clip_id)
             continue
 
+        drain_req_id: Optional[str] = None
         try:
             c_start = float(clip["start_time"])
             c_end = float(clip["end_time"])
@@ -786,6 +887,11 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             if p_start < 0 or slice_duration <= 0 or slice_duration > MAX_CLIP_DURATION + 16.0:
                 raise ValueError(f"Invalid bounded Stage 2 range [{p_start:.2f}, {p_end:.2f}]")
 
+            drain_req_id = f"drain:{clip_id}:r{range_revision}:{uuid.uuid4().hex[:8]}"
+            if not check_and_increment_daily_transcribe_quota(max_daily_requests=25, request_id=drain_req_id):
+                logger.info("Daily transcribe quota (25/25) reached while draining queued clips; pausing backlog drain.")
+                break
+
             user_id = clip.get("user_id")
             active_key = ""
             if user_id:
@@ -796,11 +902,16 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
                     pass
             active_key = active_key or os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
-            PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(PROCESSING_DIR)) as temp_dir:
-                slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
-                extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
-                stage2_res = transcribe_stage2_precision_words(slice_mp3, api_key=active_key)
+            job_dir = get_job_workspace_dir(f"drain_{clip_id}", base_dir=PROCESSING_DIR)
+            try:
+                with tempfile.TemporaryDirectory(prefix=f"dispatch_stage2_{clip_id}_", dir=str(job_dir)) as temp_dir:
+                    slice_mp3 = Path(temp_dir) / "clip_audio.mp3"
+                    extract_stage2_clip_audio(source_path, p_start, p_end, slice_mp3)
+                    stage2_res = transcribe_stage2_precision_words(
+                        slice_mp3, api_key=active_key, request_id=drain_req_id
+                    )
+            finally:
+                shutil.rmtree(job_dir, ignore_errors=True)
 
             words = stage2_res.get("words", [])
             if words:
@@ -884,6 +995,8 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             logger.info("Successfully drained queued clip %s -> ready_review", clip_id)
 
         except Exception as e:
+            if drain_req_id:
+                refund_daily_transcribe_quota(request_id=drain_req_id)
             logger.error("Failed to drain queued clip %s: %s", clip_id, e)
 
     return drained
