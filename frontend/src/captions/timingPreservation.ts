@@ -143,11 +143,15 @@ export function generateCollisionResistantGroupId(prefix: string = 'grp'): strin
  * Invariants:
  * 1. Reject NaN, non-finite, out-of-range, and edge splits (< 0.05s from boundary).
  * 2. For captions with words: snaps to the nearest safe boundary between words.
- *    Words are NEVER chopped in half or have their timestamps altered.
+ *    Multi-word groups never chop words in half or alter their timestamps.
+ *    Single-word groups split the word's own span at the requested time and
+ *    duplicate the word text into both halves with clamped timings.
  * 3. Never produces an empty word list on either segment.
  * 4. Deep-clones styling, animation, layout, and role metadata onto both segments.
  * 5. Generates a collision-resistant unique ID for the new segment.
  * 6. Performs post-split validation before returning: invalid results return null.
+ * 7. Seam contract: for caption splits, leftGroup.end === rightGroup.start ===
+ *    boundaryMid (matching captionTimeIsActive's [start, end) seam handling).
  */
 export function splitCaptionGroupAtTime(
   group: CaptionGroup,
@@ -175,42 +179,60 @@ export function splitCaptionGroupAtTime(
   let effectiveSplitTime = splitTime;
 
   if (isCaptionWithWords) {
-    // A spoken caption must have at least 2 words to be split into two valid caption segments
-    if (words.length < 2) {
-      return null;
-    }
-
-    // Find the closest safe boundary between adjacent words
-    let bestBoundaryIndex = 0;
-    let minDistance = Infinity;
-
-    for (let i = 0; i < words.length - 1; i++) {
-      const prevWord = words[i];
-      const nextWord = words[i + 1];
-      const boundaryTime = (prevWord.end + nextWord.start) / 2;
-      const dist = Math.abs(splitTime - boundaryTime);
-      if (dist < minDistance) {
-        minDistance = dist;
-        bestBoundaryIndex = i;
+    if (words.length === 1) {
+      // Single-word caption: split the word's own span at the requested time and
+      // duplicate the word text into both halves with clamped timings, instead of
+      // rejecting the split outright.
+      const word = words[0];
+      const wordStart = typeof word.start === 'number' && Number.isFinite(word.start) ? word.start : group.start;
+      const wordEnd = typeof word.end === 'number' && Number.isFinite(word.end) ? word.end : group.end;
+      if (wordEnd - wordStart < 0.1) {
+        return null; // Word span too short to halve meaningfully
       }
-    }
+      const seam = Number(Math.min(Math.max(splitTime, wordStart + 0.05), wordEnd - 0.05).toFixed(3));
+      if (seam <= group.start + 0.05 || seam >= group.end - 0.05) {
+        return null;
+      }
+      leftWords = [{ ...word, start: wordStart, end: seam }];
+      rightWords = [{ ...word, id: `${word.id || 'w'}_b`, start: seam, end: wordEnd }];
+    } else {
+      // Find the closest safe boundary between adjacent words
+      let bestBoundaryIndex = 0;
+      let minDistance = Infinity;
 
-    leftWords = words.slice(0, bestBoundaryIndex + 1).map((w) => ({ ...w }));
-    rightWords = words.slice(bestBoundaryIndex + 1).map((w) => ({ ...w }));
+      for (let i = 0; i < words.length - 1; i++) {
+        const prevWord = words[i];
+        const nextWord = words[i + 1];
+        const boundaryTime = (prevWord.end + nextWord.start) / 2;
+        const dist = Math.abs(splitTime - boundaryTime);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestBoundaryIndex = i;
+        }
+      }
 
-    if (leftWords.length === 0 || rightWords.length === 0) {
-      return null;
+      leftWords = words.slice(0, bestBoundaryIndex + 1).map((w) => ({ ...w }));
+      rightWords = words.slice(bestBoundaryIndex + 1).map((w) => ({ ...w }));
+
+      if (leftWords.length === 0 || rightWords.length === 0) {
+        return null;
+      }
     }
 
     const lastLeft = leftWords[leftWords.length - 1];
     const firstRight = rightWords[0];
 
-    // Split boundary MUST fall cleanly between the two word sets
+    // Split boundary MUST fall cleanly between the two word sets. When adjacent
+    // words overlap (lastLeft.end > firstRight.start), the boundary becomes the
+    // midpoint of the overlapping span and the two seam words are clamped to it,
+    // instead of rejecting the split.
     let boundaryMid: number;
+    let seamOverlaps = false;
     if (lastLeft.end <= firstRight.start) {
       boundaryMid = (lastLeft.end + firstRight.start) / 2;
     } else {
-      boundaryMid = lastLeft.end;
+      boundaryMid = (firstRight.start + lastLeft.end) / 2;
+      seamOverlaps = true;
     }
     boundaryMid = Number(boundaryMid.toFixed(3));
 
@@ -221,6 +243,17 @@ export function splitCaptionGroupAtTime(
 
     effectiveSplitTime = boundaryMid;
 
+    if (seamOverlaps) {
+      // Clamp the two seam words onto the boundary so each half stays inside its
+      // own span. Genuinely inconsistent input (words crossing the boundary far
+      // beyond the seam pair) is still rejected by the validation below.
+      lastLeft.end = boundaryMid;
+      firstRight.start = boundaryMid;
+      if (lastLeft.end <= lastLeft.start || firstRight.end <= firstRight.start) {
+        return null; // Clamping inverted a seam word: input is not a sane word sequence
+      }
+    }
+
     // Strict validation: verify that all left words are inside [group.start, boundaryMid]
     // and all right words are inside [boundaryMid, group.end]
     const leftInside = leftWords.every((w) => w.start >= group.start - 0.02 && w.end <= boundaryMid + 0.02);
@@ -230,6 +263,12 @@ export function splitCaptionGroupAtTime(
     }
   }
 
+  // Seam contract (matches captionTimeIsActive's boundary handling in
+  // timelineInteraction.ts): leftEnd === boundaryMid === rightStart, so the left
+  // half covers [group.start, boundaryMid] and the right half [boundaryMid,
+  // group.end]. The seam instant itself is shared by both halves and must not
+  // be double-rendered by callers (left end === right start is the expected
+  // adjacency; the half-open [start, end) check resolves it to the right half).
   const leftEnd = isCaptionWithWords ? effectiveSplitTime : Number(Math.max(group.start + 0.05, splitTime).toFixed(3));
   const rightStart = isCaptionWithWords ? effectiveSplitTime : Number(Math.min(group.end - 0.05, splitTime).toFixed(3));
 

@@ -303,7 +303,22 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     ? segments.reduce((max: number, s: any) => Math.max(max, Number(s.end ?? s.source_end ?? 0)), 0)
     : (clipEnd ?? (clipStart + duration));
 
-  const safeClipDuration = Math.max(1, duration, piecesFallbackEnd);
+  // Clip/presentation timebase: the ruler length is the KEPT duration (sum of
+  // segment spans), never the outer source-time hull. A [120,150]s source
+  // segment is a 30s clip — using max(piece.end) inflated the ruler to 150s.
+  // Source mode keeps the max(piece.end) hull so pieces laid out at their
+  // source coordinates still fit the visible timeline.
+  const piecesKeptDuration = (segments && segments.length > 0)
+    ? segments.reduce((sum: number, s: any) => {
+        const pieceStart = Number(s.start ?? s.source_start ?? 0);
+        const pieceEnd = Number(s.end ?? s.source_end ?? 0);
+        return sum + Math.max(0, pieceEnd - pieceStart);
+      }, 0)
+    : Math.max(0, (clipEnd ?? (clipStart + duration)) - clipStart);
+
+  const safeClipDuration = isSourceMode
+    ? Math.max(1, duration, piecesFallbackEnd)
+    : Math.max(1, duration, piecesKeptDuration);
 
   const timelineDuration = isSourceMode
     ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd, paddedEnd || 0)

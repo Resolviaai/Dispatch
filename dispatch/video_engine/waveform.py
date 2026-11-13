@@ -5,20 +5,59 @@ or speech decay based purely on lexical timestamps. Snaps cut boundaries to zero
 and local energy minima with mandatory acoustic padding.
 """
 
+import array
 import math
 import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import List, Tuple, Optional
 
 
-def extract_pcm_samples(media_path: Path, sample_rate: int = 16000) -> Tuple[bytes, int, int]:
-    """Extract raw 16-bit mono PCM samples at specified sample_rate using FFmpeg."""
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(media_path),
+def _pcm_samples(raw_bytes: bytes) -> "array.array":
+    """Decode little-endian s16le PCM into a sequence of shorts.
+
+    array.array('h') over a memoryview avoids struct.unpack materializing an
+    O(filesize) tuple of Python ints for the whole-buffer detectors. A
+    truncated odd-length tail byte is ignored to keep the buffer 2-byte
+    aligned; byte order is normalized for big-endian hosts.
+    """
+    samples = array.array("h")
+    usable = len(raw_bytes) - (len(raw_bytes) % 2)
+    if usable > 0:
+        samples.frombytes(memoryview(raw_bytes)[:usable])
+        if sys.byteorder != "little":
+            samples.byteswap()
+    return samples
+
+
+def extract_pcm_samples(
+    media_path: Path,
+    sample_rate: int = 16000,
+    clip_start: Optional[float] = None,
+    clip_end: Optional[float] = None,
+) -> Tuple[bytes, int, int]:
+    """Extract raw 16-bit mono PCM samples at specified sample_rate using FFmpeg.
+
+    Without a range the full-file PCM contract is unchanged. When clip_start
+    (and optionally clip_end) are given, only that source window is decoded
+    (ffmpeg -ss/-t, avoiding the cost of decoding unneeded audio) and sample 0
+    of the returned buffer corresponds to source time ``clip_start``. A final
+    sample-offset slice trims any demuxer overshoot so the buffer never
+    exceeds the requested window.
+    """
+    has_range = clip_start is not None or clip_end is not None
+    start_f = max(0.0, float(clip_start or 0.0)) if has_range else None
+    cmd = ["ffmpeg", "-y"]
+    if start_f is not None:
+        cmd += ["-ss", f"{start_f:.6f}"]
+    cmd += ["-i", str(media_path)]
+    if has_range and clip_end is not None:
+        window = float(clip_end) - float(clip_start or 0.0)
+        if window > 0:
+            cmd += ["-t", f"{window:.6f}"]
+    cmd += [
         "-vn",
         "-acodec", "pcm_s16le",
         "-ar", str(sample_rate),
@@ -28,6 +67,12 @@ def extract_pcm_samples(media_path: Path, sample_rate: int = 16000) -> Tuple[byt
     ]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     raw_bytes = proc.stdout
+    if has_range and clip_end is not None:
+        # Correctness net: cap the buffer at exactly the requested window so
+        # consumers indexing by [clip_start, clip_end) never read past it.
+        expected_samples = int(round((float(clip_end) - float(clip_start or 0.0)) * sample_rate))
+        if expected_samples > 0:
+            raw_bytes = raw_bytes[: expected_samples * 2]
     num_samples = len(raw_bytes) // 2
     return raw_bytes, sample_rate, num_samples
 
@@ -212,7 +257,7 @@ def detect_audio_clipping(
         return []
     threshold_amp = int(32768.0 * (10.0 ** (threshold_db / 20.0)))
     total_samples = len(raw_bytes) // 2
-    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    samples = _pcm_samples(raw_bytes)
     events = []
     in_clip = False
     start_idx = 0
@@ -260,18 +305,36 @@ def detect_audio_clipping(
 
 def detect_transient_clicks(
     raw_bytes: bytes,
-    sample_rate: int = 16000
+    sample_rate: int = 16000,
+    speech_intervals: Optional[List[Tuple[float, float]]] = None,
 ) -> List[dict]:
-    """Detect brief transient clicks, mouth pops, or mic bumps using peak-to-RMS crest factor."""
+    """Detect brief transient clicks, mouth pops, or mic bumps using peak-to-RMS crest factor.
+
+    When `speech_intervals` (list of (start, end) source seconds) is provided,
+    only clicks OUTSIDE speech are flagged: broadband transients inside active
+    speech are usually plosives/consonants, not mic defects. Without intervals
+    the legacy ungated behavior is preserved.
+    """
     if not raw_bytes:
         return []
     total_samples = len(raw_bytes) // 2
-    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    samples = _pcm_samples(raw_bytes)
     frame_len = int(sample_rate * 0.010)  # 10ms frame
     if frame_len <= 0:
         frame_len = 160
+    frame_sec = frame_len / float(sample_rate)
+
+    def _in_speech(t0: float, t1: float) -> bool:
+        for s_start, s_end in speech_intervals or []:
+            if t0 < float(s_end) and t1 > float(s_start):
+                return True
+        return False
+
     clicks = []
     for offset in range(0, total_samples - frame_len, frame_len):
+        t0 = offset / float(sample_rate)
+        if speech_intervals is not None and _in_speech(t0, t0 + frame_sec):
+            continue
         frame = samples[offset:offset + frame_len]
         peak = max(abs(s) for s in frame)
         if peak < 3200:
@@ -279,7 +342,7 @@ def detect_transient_clicks(
         rms = math.sqrt(sum(s * s for s in frame) / float(len(frame)))
         crest = peak / (rms + 1e-6)
         if crest > 4.5 and peak > 5000:
-            t = round(offset / float(sample_rate), 3)
+            t = round(t0, 3)
             clicks.append({
                 "type": "transient_click",
                 "source_start": t,
@@ -301,7 +364,7 @@ def detect_breaths_and_coughs(
     if not raw_bytes:
         return []
     total_samples = len(raw_bytes) // 2
-    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
+    samples = _pcm_samples(raw_bytes)
     total_dur = total_samples / float(sample_rate)
 
     gaps = []
@@ -316,6 +379,7 @@ def detect_breaths_and_coughs(
     results = []
     frame_ms = 50.0
     samples_per_frame = int(sample_rate * (frame_ms / 1000.0))
+    cough_join_gap = 0.100  # seconds of tolerated silence between joined cough frames
 
     for gap_start, gap_end in gaps:
         if gap_end - gap_start < 0.20:
@@ -326,6 +390,29 @@ def detect_breaths_and_coughs(
 
         active_breath_start = None
         breath_frames = 0
+        cough_start = None
+        last_cough_frame = None
+        cough_peak_db = -96.0
+
+        def _flush_cough() -> None:
+            nonlocal cough_start, last_cough_frame, cough_peak_db
+            if cough_start is None or last_cough_frame is None:
+                return
+            # A cough frame claims the same trailing burst window as the legacy
+            # per-frame proposal; a coalesced run spans first..last + burst.
+            cough_end = min(gap_end, last_cough_frame + 0.25)
+            results.append({
+                "type": "cough",
+                "source_start": round(cough_start, 3),
+                "source_end": round(cough_end, 3),
+                "duration": round(max(0.0, cough_end - cough_start), 3),
+                "confidence": 0.85,
+                "decision": "REVIEW",
+                "reason": f"Acoustic cough/throat-clear burst ({cough_peak_db:.1f} dBFS)",
+            })
+            cough_start = None
+            last_cough_frame = None
+            cough_peak_db = -96.0
 
         for f_idx in range(0, len(gap_samples) - samples_per_frame, samples_per_frame):
             frame = gap_samples[f_idx:f_idx + samples_per_frame]
@@ -339,34 +426,39 @@ def detect_breaths_and_coughs(
             t_frame = gap_start + (f_idx / float(sample_rate))
 
             if db > -18.0:
-                results.append({
-                    "type": "cough",
-                    "source_start": round(t_frame, 3),
-                    "source_end": round(t_frame + 0.25, 3),
-                    "duration": 0.25,
-                    "confidence": 0.85,
-                    "decision": "REVIEW",
-                    "reason": f"Acoustic cough/throat-clear burst ({db:.1f} dBFS)",
-                })
-            elif -45.0 <= db <= -22.0 and zcr >= 0.08:
-                if active_breath_start is None:
-                    active_breath_start = t_frame
-                breath_frames += 1
+                # Coalesce consecutive cough frames (and runs separated by one
+                # short sub-tolerance lull) into a single proposal spanning the
+                # burst instead of emitting one per 50ms frame.
+                if cough_start is not None and (t_frame - last_cough_frame) > cough_join_gap:
+                    _flush_cough()
+                if cough_start is None:
+                    cough_start = t_frame
+                last_cough_frame = t_frame
+                cough_peak_db = max(cough_peak_db, db)
             else:
-                if active_breath_start is not None:
-                    b_dur = breath_frames * (frame_ms / 1000.0)
-                    if 0.18 <= b_dur <= 1.2:
-                        results.append({
-                            "type": "breath",
-                            "source_start": round(active_breath_start, 3),
-                            "source_end": round(active_breath_start + b_dur, 3),
-                            "duration": round(b_dur, 3),
-                            "confidence": 0.80,
-                            "decision": "REVIEW",
-                            "reason": f"Audible breath intake ({b_dur:.2f}s)",
-                        })
-                    active_breath_start = None
-                    breath_frames = 0
+                if cough_start is not None and (t_frame - last_cough_frame) > cough_join_gap:
+                    _flush_cough()
+                if -45.0 <= db <= -22.0 and zcr >= 0.08:
+                    if active_breath_start is None:
+                        active_breath_start = t_frame
+                    breath_frames += 1
+                else:
+                    if active_breath_start is not None:
+                        b_dur = breath_frames * (frame_ms / 1000.0)
+                        if 0.18 <= b_dur <= 1.2:
+                            results.append({
+                                "type": "breath",
+                                "source_start": round(active_breath_start, 3),
+                                "source_end": round(active_breath_start + b_dur, 3),
+                                "duration": round(b_dur, 3),
+                                "confidence": 0.80,
+                                "decision": "REVIEW",
+                                "reason": f"Audible breath intake ({b_dur:.2f}s)",
+                            })
+                        active_breath_start = None
+                        breath_frames = 0
+
+        _flush_cough()
 
         if active_breath_start is not None:
             b_dur = breath_frames * (frame_ms / 1000.0)

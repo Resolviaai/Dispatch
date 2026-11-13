@@ -46,6 +46,7 @@ import {
 import { CaptionTrack, CaptionGroup, StyleConfig, AnimationConfig, LayoutConfig, OverlayAnimationConfig } from './types';
 import { LayoutMode, AvailableLayoutMode } from '../screens/ClipsScreen';
 import { splitCaptionGroupAtTime, mergeAdjacentCaptionGroups, preserveWordTimingsOnEdit } from './timingPreservation';
+import { getSavedTemplateStorageKey } from './normalizeTrack';
 import { downloadSrtFile } from './srtExport';
 import { TranscriptEditor } from './TranscriptEditor';
 import { applySectionStylesToTrack, StyleSection } from './applyToAll';
@@ -1128,6 +1129,10 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     color: string;
     enableAlpha?: boolean;
   } | null>(null);
+  // Remembers the color the open picker session started from, so onClose can
+  // commit exactly one undoable snapshot for the whole continuous drag instead
+  // of one history entry per pointermove.
+  const colorDragOriginRef = useRef<string | null>(null);
   const [overlayAnimTab, setOverlayAnimTab] = useState<'enter' | 'exit'>('enter');
   const isTranscriptOpen = activePanel === 'transcript';
   const setIsTranscriptOpen = (open: boolean) => setActivePanel(open ? 'transcript' : 'none');
@@ -1365,7 +1370,8 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
   const handleApplyDefaultTemplate = () => {
     if (!track) return;
     try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('dispatch_default_template') : null;
+      // Read the same per-user default-template key normalizeTrack/TemplateStudio use.
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(getSavedTemplateStorageKey()) : null;
       if (!raw) return;
       const tpl = JSON.parse(raw);
       const c = tpl.captions || {};
@@ -1436,7 +1442,10 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
     stylePatch?: Partial<StyleConfig>,
     layoutPatch?: Partial<LayoutConfig>,
     animationPatch?: Partial<AnimationConfig>,
-    commitToHistory: boolean = false
+    // Defaults to a committed (undoable) one-shot edit. Continuous gesture paths
+    // (slider drags, live color-picker previews) MUST pass explicit false so
+    // pointermove streams never spam the history stack.
+    commitToHistory: boolean = true
   ) => {
     if (!track || !currentGroup || !isTextLayerSelected) return;
 
@@ -2956,7 +2965,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 max={100}
                 step={1}
                 unit="%"
-                onChange={(val) => patch({ text_opacity: Number((val / 100).toFixed(2)) })}
+                onChange={(val) => patch({ text_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
               />
 
               {/* Font Size Slider */}
@@ -2966,7 +2975,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 min={16}
                 max={90}
                 unit="px"
-                onChange={(val) => patch({ font_size: val })}
+                onChange={(val) => patch({ font_size: val }, undefined, undefined, false)}
               />
 
               {/* Text Alignment */}
@@ -3164,7 +3173,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={12}
                     step={0.5}
                     unit="px"
-                    onChange={(val) => patch({ outline_width: val })}
+                    onChange={(val) => patch({ outline_width: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Stroke Opacity"
@@ -3173,7 +3182,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <CapCutColorRow
                     label="Stroke Color"
@@ -3213,7 +3222,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={40}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ glow_blur: val })}
+                    onChange={(val) => patch({ glow_blur: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Glow Opacity"
@@ -3222,7 +3231,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <CapCutColorRow
                     label="Glow Color"
@@ -3299,7 +3308,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
 
                   {/* Corner Radius */}
@@ -3310,7 +3319,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_corner_radius: val })}
+                    onChange={(val) => patch({ background_corner_radius: val }, undefined, undefined, false)}
                   />
 
                   {/* Width Padding */}
@@ -3321,7 +3330,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={40}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_padding_x: val })}
+                    onChange={(val) => patch({ background_padding_x: val }, undefined, undefined, false)}
                   />
 
                   {/* Height Padding */}
@@ -3332,7 +3341,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_padding_y: val })}
+                    onChange={(val) => patch({ background_padding_y: val }, undefined, undefined, false)}
                   />
 
                   {/* X Offset */}
@@ -3343,7 +3352,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={50}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_offset_x: val })}
+                    onChange={(val) => patch({ background_offset_x: val }, undefined, undefined, false)}
                   />
 
                   {/* Y Offset */}
@@ -3354,7 +3363,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={50}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_offset_y: val })}
+                    onChange={(val) => patch({ background_offset_y: val }, undefined, undefined, false)}
                   />
                 </>
               )}
@@ -3397,7 +3406,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
 
                   {/* Blur */}
@@ -3408,7 +3417,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={25}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ shadow_blur: val })}
+                    onChange={(val) => patch({ shadow_blur: val }, undefined, undefined, false)}
                   />
 
                   {/* Distance */}
@@ -3424,7 +3433,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                       const rad = (angle * Math.PI) / 180;
                       const offX = Number((dist * Math.cos(rad)).toFixed(1));
                       const offY = Number((dist * Math.sin(rad)).toFixed(1));
-                      patch({ shadow_distance: dist, shadow_offset_x: offX, shadow_offset_y: offY });
+                      patch({ shadow_distance: dist, shadow_offset_x: offX, shadow_offset_y: offY }, undefined, undefined, false);
                     }}
                   />
 
@@ -3441,7 +3450,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                       const rad = (angle * Math.PI) / 180;
                       const offX = Number((dist * Math.cos(rad)).toFixed(1));
                       const offY = Number((dist * Math.sin(rad)).toFixed(1));
-                      patch({ shadow_angle: angle, shadow_offset_x: offX, shadow_offset_y: offY });
+                      patch({ shadow_angle: angle, shadow_offset_x: offX, shadow_offset_y: offY }, undefined, undefined, false);
                     }}
                   />
                 </>
@@ -3489,7 +3498,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 max={2.0}
                 step={0.05}
                 unit="x"
-                onChange={(val) => patch(undefined, { scale: Number(val.toFixed(2)) })}
+                onChange={(val) => patch(undefined, { scale: Number(val.toFixed(2)) }, undefined, false)}
               />
 
               {/* Character Spacing */}
@@ -3500,7 +3509,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 max={15}
                 step={0.5}
                 unit="px"
-                onChange={(val) => patch({ letter_spacing: Number(val.toFixed(1)) })}
+                onChange={(val) => patch({ letter_spacing: Number(val.toFixed(1)) }, undefined, undefined, false)}
               />
 
               {/* Line Spacing */}
@@ -3511,7 +3520,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                 max={2.2}
                 step={0.05}
                 unit=""
-                onChange={(val) => patch({ line_height: Number(val.toFixed(2)) })}
+                onChange={(val) => patch({ line_height: Number(val.toFixed(2)) }, undefined, undefined, false)}
               />
 
               {/* Position Presets & Offsets */}
@@ -3550,7 +3559,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                   max={90}
                   step={1}
                   unit="%"
-                  onChange={(val) => patch(undefined, { position_y: Number((val / 100).toFixed(2)) })}
+                  onChange={(val) => patch(undefined, { position_y: Number((val / 100).toFixed(2)) }, undefined, false)}
                 />
 
                 <ValueSlider
@@ -3560,7 +3569,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                   max={90}
                   step={1}
                   unit="%"
-                  onChange={(val) => patch(undefined, { position_x: Number((val / 100).toFixed(2)) })}
+                  onChange={(val) => patch(undefined, { position_x: Number((val / 100).toFixed(2)) }, undefined, false)}
                 />
               </div>
 
@@ -3626,7 +3635,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={12}
                     step={0.5}
                     unit="px"
-                    onChange={(val) => patch({ outline_width: val })}
+                    onChange={(val) => patch({ outline_width: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Stroke Opacity"
@@ -3635,7 +3644,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ outline_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <CapCutColorRow
                     label="Stroke Color"
@@ -3676,7 +3685,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={40}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ glow_blur: val })}
+                    onChange={(val) => patch({ glow_blur: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Glow Opacity"
@@ -3685,7 +3694,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ glow_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <CapCutColorRow
                     label="Glow Color"
@@ -3738,7 +3747,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ shadow_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Blur"
@@ -3747,7 +3756,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={25}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ shadow_blur: val })}
+                    onChange={(val) => patch({ shadow_blur: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Offset X"
@@ -3756,7 +3765,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ shadow_offset_x: val })}
+                    onChange={(val) => patch({ shadow_offset_x: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Offset Y"
@@ -3765,7 +3774,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ shadow_offset_y: val })}
+                    onChange={(val) => patch({ shadow_offset_y: val }, undefined, undefined, false)}
                   />
                 </>
               )}
@@ -3828,7 +3837,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={100}
                     step={1}
                     unit="%"
-                    onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) })}
+                    onChange={(val) => patch({ background_opacity: Number((val / 100).toFixed(2)) }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Corner Radius"
@@ -3837,7 +3846,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_corner_radius: val })}
+                    onChange={(val) => patch({ background_corner_radius: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Width Padding (X)"
@@ -3846,7 +3855,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={40}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_padding_x: val })}
+                    onChange={(val) => patch({ background_padding_x: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Height Padding (Y)"
@@ -3855,7 +3864,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={30}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_padding_y: val })}
+                    onChange={(val) => patch({ background_padding_y: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Offset X"
@@ -3864,7 +3873,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={50}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_offset_x: val })}
+                    onChange={(val) => patch({ background_offset_x: val }, undefined, undefined, false)}
                   />
                   <ValueSlider
                     label="Offset Y"
@@ -3873,7 +3882,7 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
                     max={50}
                     step={1}
                     unit="px"
-                    onChange={(val) => patch({ background_offset_y: val })}
+                    onChange={(val) => patch({ background_offset_y: val }, undefined, undefined, false)}
                   />
                 </>
               )}
@@ -4510,10 +4519,20 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
         color={activeColorPicker.color}
         enableAlpha={activeColorPicker.enableAlpha}
         onChange={(newColor) => {
+          if (colorDragOriginRef.current === null) colorDragOriginRef.current = activeColorPicker.color;
           setActiveColorPicker((prev) => (prev ? { ...prev, color: newColor } : null));
-          patch({ [activeColorPicker.property]: newColor });
+          // Continuous gesture (spectrum pointer drag): live preview only.
+          patch({ [activeColorPicker.property]: newColor }, undefined, undefined, false);
         }}
-        onClose={() => setActiveColorPicker(null)}
+        onClose={() => {
+          const origin = colorDragOriginRef.current;
+          colorDragOriginRef.current = null;
+          // Single undoable snapshot at gesture end; skip no-op closes.
+          if (origin !== null && activeColorPicker.color !== origin) {
+            patch({ [activeColorPicker.property]: activeColorPicker.color }, undefined, undefined, true);
+          }
+          setActiveColorPicker(null);
+        }}
       />
     )}
   </div>
@@ -5025,10 +5044,20 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
           color={activeColorPicker.color}
           enableAlpha={activeColorPicker.enableAlpha}
           onChange={(newColor) => {
+            if (colorDragOriginRef.current === null) colorDragOriginRef.current = activeColorPicker.color;
             setActiveColorPicker((prev) => (prev ? { ...prev, color: newColor } : null));
-            patch({ [activeColorPicker.property]: newColor });
+            // Continuous gesture (spectrum pointer drag): live preview only.
+            patch({ [activeColorPicker.property]: newColor }, undefined, undefined, false);
           }}
-          onClose={() => setActiveColorPicker(null)}
+          onClose={() => {
+            const origin = colorDragOriginRef.current;
+            colorDragOriginRef.current = null;
+            // Single undoable snapshot at gesture end; skip no-op closes.
+            if (origin !== null && activeColorPicker.color !== origin) {
+              patch({ [activeColorPicker.property]: activeColorPicker.color }, undefined, undefined, true);
+            }
+            setActiveColorPicker(null);
+          }}
         />
       )}
     </div>
@@ -5036,10 +5065,9 @@ const CaptionStudioComponent: React.FC<CaptionStudioProps> = ({
 };
 
 function areCaptionStudioPropsEqual(prev: CaptionStudioProps, next: CaptionStudioProps): boolean {
-  // If transcript is open, allow live playback re-renders for word highlighting
-  if (next.activePanel === 'transcript') {
-    if (prev.currentTime !== next.currentTime) return false;
-  }
+  // The playback clock drives word highlighting, playhead and time displays in
+  // every panel, so it must never be skipped by the memo short-circuit.
+  if (prev.currentTime !== next.currentTime) return false;
 
   // Functional state checks
   if (prev.track !== next.track) return false;
@@ -5055,6 +5083,30 @@ function areCaptionStudioPropsEqual(prev: CaptionStudioProps, next: CaptionStudi
   if (prev.canDeletePiece !== next.canDeletePiece) return false;
   if (prev.piecesCount !== next.piecesCount) return false;
   if (prev.selectedPieceIndex !== next.selectedPieceIndex) return false;
+
+  // Callbacks and derived data: a new identity may carry fresh behavior (the
+  // parent is not fully memoized upstream), so stale closures are not safe.
+  if (prev.splitClipTime !== next.splitClipTime) return false;
+  if (prev.onSplitClip !== next.onSplitClip) return false;
+  if (prev.onDeletePiece !== next.onDeletePiece) return false;
+  if (prev.onUpdateTrack !== next.onUpdateTrack) return false;
+  if (prev.onUndo !== next.onUndo) return false;
+  if (prev.onRedo !== next.onRedo) return false;
+
+  // Callers may pass `available_layout_modes || []`, which allocates a fresh
+  // array per render when the field is absent — compare by content in that case.
+  if (prev.availableLayoutModes !== next.availableLayoutModes) {
+    const prevModes = prev.availableLayoutModes;
+    const nextModes = next.availableLayoutModes;
+    if (
+      !prevModes ||
+      !nextModes ||
+      prevModes.length !== nextModes.length ||
+      prevModes.some((m, i) => m !== nextModes[i])
+    ) {
+      return false;
+    }
+  }
 
   return true;
 }

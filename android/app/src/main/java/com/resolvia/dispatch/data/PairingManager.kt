@@ -15,13 +15,55 @@ import androidx.security.crypto.MasterKey
  * Healthy devices still migrate legacy plaintext into secure storage.
  */
 class PairingManager(context: Context) {
-    private val prefs: SharedPreferences? = createEncryptedOrFallbackPrefs(context)
-    private val cloudPrefs: SharedPreferences? = createSecureCloudPrefs(context)
+    private val prefs: SharedPreferences?
+    private val cloudPrefs: SharedPreferences?
+
+    init {
+        // Reuses the prewarmed process-wide instance when available; the two
+        // synchronous EncryptedSharedPreferences.create calls below then run
+        // at most once per process, never again per constructor.
+        val shared = sharedSecurePrefs(context.applicationContext)
+        prefs = shared.credentials
+        cloudPrefs = shared.cloud
+    }
+
+    /** Immutable pair of secure stores created exactly once per process. */
+    private class SecurePrefs(val credentials: SharedPreferences?, val cloud: SharedPreferences?)
 
     companion object {
         private const val TAG = "PairingManager"
         private const val SECURE_PREFS_NAME = "dispatch_youtube_secure"
         private const val LEGACY_PREFS_NAME = "dispatch_youtube"
+
+        @Volatile
+        private var cachedPrefs: SecurePrefs? = null
+
+        /**
+         * Warms the EncryptedSharedPreferences stores off the main thread.
+         * Invoked once from DispatchApplication.onCreate on Dispatchers.IO so
+         * the first [PairingManager] constructor (which runs on the UI thread
+         * in MainActivity.onCreate and inside upload workers) reuses the cached
+         * instance instead of paying two synchronous
+         * EncryptedSharedPreferences.create round-trips. Idempotent and safe
+         * from any thread; construction is double-checked and synchronized so
+         * exactly one thread performs the expensive initialization.
+         */
+        fun prewarm(context: Context) {
+            sharedSecurePrefs(context.applicationContext)
+        }
+
+        private fun sharedSecurePrefs(context: Context): SecurePrefs {
+            cachedPrefs?.let { return it }
+            synchronized(this) {
+                cachedPrefs?.let { return it }
+                val fresh = SecurePrefs(
+                    credentials = createEncryptedOrFallbackPrefs(context),
+                    cloud = createSecureCloudPrefs(context)
+                )
+                cachedPrefs = fresh
+                return fresh
+            }
+        }
 
         private fun createEncryptedOrFallbackPrefs(context: Context): SharedPreferences? {
             val legacyPrefs = context.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE)

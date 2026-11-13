@@ -455,6 +455,7 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
       prev.previewingProposalId === next.previewingProposalId &&
       prev.filmstrip === next.filmstrip &&
       prev.clipDuration === next.clipDuration &&
+      prev.clipEnd === next.clipEnd &&
       prev.waveformSamples === next.waveformSamples &&
       prev.transcriptWords === next.transcriptWords
     );
@@ -658,7 +659,9 @@ export const SpeechCleanupWorkspace: React.FC<SpeechCleanupWorkspaceProps> = ({
               isExpanded={expandedId === prop.id}
               onToggleExpand={handleToggleExpand}
               filmstrip={filmstrip}
-              clipDuration={duration}
+              // MiniFilmstrip computes its context window in source-absolute time,
+              // so its clipDuration boundary must be the clip's source-space end.
+              clipDuration={clipEnd}
               clipStart={clipStart}
               clipEnd={clipEnd}
               currentTime={currentTime}

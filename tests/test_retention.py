@@ -63,10 +63,11 @@ class TestStorageRetention(unittest.TestCase):
                 VALUES ('chunk_old', 'sess_old', 'old_vid.mp4', ?, ?, 'transcribed')
             """, (str(old_file), eight_days_ago.strftime("%Y-%m-%d %H:%M:%S")))
 
-            # Clip is still in ready_review (not published)
+            # Clip was rejected by the creator (not pending review, so the 7-day
+            # rule may prune the source; a 'ready_review' clip would protect it)
             cursor.execute("""
                 INSERT INTO clips (id, session_id, chunk_id, title, duration, start_time, end_time, status, created_at)
-                VALUES ('clip_old_1', 'sess_old', 'chunk_old', 'Draft Clip', 10.0, 0, 10, 'ready_review', ?)
+                VALUES ('clip_old_1', 'sess_old', 'chunk_old', 'Draft Clip', 10.0, 0, 10, 'rejected', ?)
             """, (eight_days_ago.strftime("%Y-%m-%d %H:%M:%S"),))
 
             # 2. Recent source video (2 days old)

@@ -92,6 +92,21 @@ class YouTubeDirectUploadWorker(
         /** Single-flight guard: overlapping drain runs race the same outbox rows. */
         private val drainLock = java.util.concurrent.atomic.AtomicBoolean(false)
 
+        /**
+         * OkHttp client shared by every worker instance. Constructing a fresh
+         * client per worker run (own connection pool + dispatcher threads)
+         * paid fresh TCP+TLS handshakes and leaked idle threads between runs.
+         * Same timeouts/config as the previous per-instance client; lazily
+         * created once per process (thread-safe lazy).
+         */
+        internal val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(300, TimeUnit.SECONDS)
+                .readTimeout(300, TimeUnit.SECONDS)
+                .build()
+        }
+
         const val UPLOAD_CHANNEL_ID = "dispatch_uploads"
         const val UPLOAD_NOTIFICATION_ID = 4202
 
@@ -466,11 +481,9 @@ class YouTubeDirectUploadWorker(
     private val dao = db.recordingDao()
     private val pairingManager = PairingManager(appContext)
     private val gson = Gson()
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(300, TimeUnit.SECONDS)
-        .readTimeout(300, TimeUnit.SECONDS)
-        .build()
+
+    /** Process-wide shared client; per-instance construction is the defect being fixed. */
+    private val client = sharedClient
 
     /** Dispatch cloud control plane; holds the YouTube vault credentials. */
     private val workerUrl = "https://dispatch-cloud.resolviaai.workers.dev"
@@ -1103,6 +1116,11 @@ class YouTubeDirectUploadWorker(
         // Upload in 8MB slices
         var raf: RandomAccessFile? = null
         var tokenRefreshAttempts = 0
+        // One reusable read buffer sized for the full 8 MB chunk; the final
+        // partial slice reads only chunkLen bytes and the request body writes
+        // exactly buffer[0, chunkLen) via toRequestBody's explicit byte count
+        // (zero-copy), so no per-slice reallocation is needed.
+        val buffer = ByteArray(chunkSize.toInt())
         try {
             raf = RandomAccessFile(file, "r")
             while (currentOffset < totalBytes) {
@@ -1113,9 +1131,8 @@ class YouTubeDirectUploadWorker(
                 val end = minOf(start + chunkSize - 1L, totalBytes - 1L)
                 val chunkLen = (end - start + 1L).toInt()
 
-                val buffer = ByteArray(chunkLen)
                 raf.seek(start)
-                raf.readFully(buffer)
+                raf.readFully(buffer, 0, chunkLen)
 
                 val chunkBody = buffer.toRequestBody("video/mp4".toMediaType(), 0, chunkLen)
                 // Cloud vault sessions: the worker-handed upload URL is already

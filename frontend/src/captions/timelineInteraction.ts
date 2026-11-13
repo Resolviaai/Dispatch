@@ -51,8 +51,15 @@ export function sourceTimeToClipTime(
   return Math.min(Math.max(0, clipDuration), Math.max(0, local));
 }
 
+/**
+ * Half-open seam check: a caption is active on [start, end) so adjacent caption
+ * groups never double-render at their shared boundary time. The end-of-track
+ * instant stays inclusive only via renderers (DispatchCaptionRenderer /
+ * InteractiveTextCanvas own that inclusive `[start, end]` policy — not changed
+ * here to avoid cross-owned semantic edits).
+ */
 export function captionTimeIsActive(time: number, start: number, end: number): boolean {
-  return Number.isFinite(time) && time >= start && time <= end;
+  return Number.isFinite(time) && time >= start && time < end;
 }
 
 export function extendSourceRange(

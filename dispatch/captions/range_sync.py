@@ -80,13 +80,106 @@ def find_uncovered_caption_ranges(
     return _edit_window_uncovered_ranges((float(selected_start), float(selected_end)), covered)
 
 
+def _group_gap_words(
+    norm_words: List[Dict[str, Any]],
+    gap_start: float,
+    gap_end: float,
+    selected_start: float,
+    style_source: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Split normalized gap words into standard 2-3 word caption cards.
+
+    Audit 2026-11: a long gap used to be wrapped into ONE wall-of-text card.
+    Word-timed gap words are routed through the canonical grouper so card
+    limits, pause boundaries, and character budgets are enforced exactly like
+    first-pass transcription. Phrase (non-exact) timing cannot be subdivided
+    without inventing word timings, so it keeps the single-phrase-group shape.
+    New groups inherit the rebased track's default_style/layout/animation and
+    keep their stable source-anchored word ids.
+    """
+    all_exact = all(w.get("is_exact", True) for w in norm_words)
+    if all_exact:
+        try:
+            from dispatch.captions.grouper import group_words_into_captions
+
+            segment = {
+                "start": norm_words[0]["start"],
+                "end": norm_words[-1]["end"],
+                "text": " ".join(w["text"] for w in norm_words),
+                "words": [
+                    {
+                        "word": w["text"],
+                        "start": w["start"],
+                        "end": w["end"],
+                        "is_exact": bool(w.get("is_exact", True)),
+                    }
+                    for w in norm_words
+                ],
+            }
+            track = group_words_into_captions([segment], clip_start=0.0, clip_end=float("inf"))
+            grouped = track.to_dict().get("groups", [])
+        except Exception:
+            grouped = []
+        # The grouper rebuilds fresh Word/Group objects; restore the stable
+        # source-anchored ids positionally (word timings pass through it
+        # unchanged for clip-relative, exact-timed input).
+        if len(grouped) > 0:
+            flat_out = [w for g in grouped for w in g.get("words", [])]
+            if len(flat_out) == len(norm_words):
+                for out_w, src_w in zip(flat_out, norm_words):
+                    if src_w.get("word_id"):
+                        out_w["word_id"] = src_w["word_id"]
+                    if src_w.get("id"):
+                        out_w["id"] = src_w["id"]
+            else:
+                # Timing drifted through the grouper; re-derive deterministic
+                # source-anchored ids instead of keeping random grouper uuids.
+                for out_w in flat_out:
+                    out_w["word_id"] = compute_word_id(
+                        {
+                            "start": out_w.get("start", 0.0),
+                            "end": out_w.get("end", 0.0),
+                            "text": out_w.get("text", ""),
+                        },
+                        selected_start,
+                    )
+            for idx, grp in enumerate(grouped):
+                if len(grouped) > 1:
+                    grp["id"] = f"gap_{int(round(gap_start * 1000))}_{int(round(gap_end * 1000))}_{idx + 1}"
+                else:
+                    grp["id"] = f"gap_{int(round(gap_start * 1000))}_{int(round(gap_end * 1000))}"
+    else:
+        grouped = [{
+            "id": f"gap_{int(round(gap_start * 1000))}_{int(round(gap_end * 1000))}",
+            "type": "caption",
+            "has_word_timing": False,
+            "timing_mode": "phrase",
+            "start": norm_words[0]["start"],
+            "end": norm_words[-1]["end"],
+            "words": norm_words,
+        }]
+
+    if style_source and isinstance(style_source, dict):
+        for grp in grouped:
+            for default_key, group_key in (
+                ("default_style", "style"),
+                ("default_layout", "layout"),
+                ("default_animation", "animation"),
+            ):
+                inherited = style_source.get(default_key)
+                if isinstance(inherited, dict):
+                    grp[group_key] = deepcopy(inherited)
+    return grouped
+
+
 def _normalize_gap_transcription_result(
     raw_gap: Any,
     gap_start: float,
     gap_end: float,
     selected_start: float,
+    style_source: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Normalize a Stage-2 gap transcription callback output into a clip-relative group."""
+    """Normalize a Stage-2 gap transcription callback output into clip-relative groups."""
     if not raw_gap:
         return None
     if isinstance(raw_gap, dict) and isinstance(raw_gap.get("groups"), list):
@@ -124,15 +217,7 @@ def _normalize_gap_transcription_result(
     if not norm_words:
         return None
     return {
-        "groups": [{
-            "id": f"gap_{int(round(gap_start * 1000))}_{int(round(gap_end * 1000))}",
-            "type": "caption",
-            "has_word_timing": all(w.get("is_exact", True) for w in norm_words),
-            "timing_mode": "word" if all(w.get("is_exact", True) for w in norm_words) else "phrase",
-            "start": norm_words[0]["start"],
-            "end": norm_words[-1]["end"],
-            "words": norm_words,
-        }]
+        "groups": _group_gap_words(norm_words, gap_start, gap_end, selected_start, style_source=style_source),
     }
 
 
@@ -169,7 +254,9 @@ def rebase_caption_track(
                 gap_res = gap_transcribe_fn(gap_start, gap_end)
             except Exception:
                 gap_res = None
-            normalized_gap = _normalize_gap_transcription_result(gap_res, gap_start, gap_end, selected_start)
+            normalized_gap = _normalize_gap_transcription_result(
+                gap_res, gap_start, gap_end, selected_start, style_source=saved_track,
+            )
             if normalized_gap and normalized_gap.get("groups"):
                 if active_transcript is None:
                     active_transcript = {"groups": []}

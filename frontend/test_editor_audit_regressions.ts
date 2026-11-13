@@ -100,7 +100,7 @@ console.log('  ✓ Spoken words remain intact with exact authentic timestamps\n'
 // =========================================================================
 // TEST 2: Split Rejection of Degenerate / Corrupted / Edge Cases
 // =========================================================================
-console.log('Test 2: Split rejects NaN, out-of-bounds, edge splits, and single-word groups...');
+console.log('Test 2: Split rejects NaN, out-of-bounds, edge splits, and degenerate word spans...');
 assert.equal(splitCaptionGroupAtTime(originalGroup, NaN), null, 'Rejects NaN splitTime');
 assert.equal(splitCaptionGroupAtTime(originalGroup, Infinity), null, 'Rejects Infinity splitTime');
 assert.equal(splitCaptionGroupAtTime(originalGroup, 0.2), null, 'Rejects split before group start');
@@ -108,7 +108,9 @@ assert.equal(splitCaptionGroupAtTime(originalGroup, 5.0), null, 'Rejects split a
 assert.equal(splitCaptionGroupAtTime(originalGroup, originalGroup.start + 0.02), null, 'Rejects edge split near start');
 assert.equal(splitCaptionGroupAtTime(originalGroup, originalGroup.end - 0.02), null, 'Rejects edge split near end');
 
-// Single-word group cannot be split into two valid caption segments
+// Single-word groups now split their own word span (defect fix): the word text
+// is duplicated into both halves with clamped timings. Edge splits and
+// degenerate word spans are still rejected.
 const singleWordGroup: CaptionGroup = {
   id: 'grp_single',
   start: 1.0,
@@ -117,8 +119,28 @@ const singleWordGroup: CaptionGroup = {
   words: [{ id: 'w_one', text: 'Only', start: 1.1, end: 1.9, confidence: 1.0 }],
   type: 'caption',
 };
-assert.equal(splitCaptionGroupAtTime(singleWordGroup, 1.5), null, 'Rejects splitting single-word caption');
-console.log('  ✓ Degenerate and edge splits strictly rejected\n');
+assert.equal(splitCaptionGroupAtTime(singleWordGroup, 0.85), null, 'Rejects single-word split outside the group');
+assert.equal(splitCaptionGroupAtTime(singleWordGroup, 2.5), null, 'Rejects single-word split after the group');
+const tinyWordGroup: CaptionGroup = {
+  ...singleWordGroup,
+  words: [{ id: 'w_tiny', text: 'Only', start: 1.1, end: 1.18, confidence: 1.0 }],
+};
+assert.equal(splitCaptionGroupAtTime(tinyWordGroup, 1.14), null, 'Rejects single-word split of a sub-0.1s word span');
+const singleSplit = splitCaptionGroupAtTime(singleWordGroup, 1.5);
+assert.ok(singleSplit, 'Single-word caption splits its own span');
+const [swLeft, swRight] = singleSplit;
+assert.equal(swLeft.start, 1.0);
+assert.equal(swLeft.end, 1.5, 'Left half ends at the seam');
+assert.equal(swRight.start, 1.5, 'Right half starts at the seam');
+assert.equal(swRight.end, 2.0);
+assert.equal(swLeft.words?.[0].start, 1.1, 'Left word keeps its original start');
+assert.equal(swLeft.words?.[0].end, 1.5, 'Left word clamped to the seam');
+assert.equal(swRight.words?.[0].start, 1.5, 'Right word clamped to the seam');
+assert.equal(swRight.words?.[0].end, 1.9, 'Right word keeps its original end');
+assert.equal(swLeft.words?.[0].text, 'Only');
+assert.equal(swRight.words?.[0].text, 'Only', 'Word text duplicated into both halves');
+assert.notEqual(swRight.id, 'grp_single', 'Right half gets a fresh id');
+console.log('  ✓ Degenerate and edge splits strictly rejected; single-word captions split their own span\n');
 
 // =========================================================================
 // TEST 3: Collision-Resistant ID Monotonicity
@@ -229,12 +251,21 @@ console.log('  ✓ Template animations propagate and user-scoped storage verifie
 // TEST 7: Filmstrip Validation & Strict Corrupted Data Rejection
 // =========================================================================
 console.log('Test 7: Filmstrip rejects corrupted payloads without silent clamping...');
-// Stale duration rejected
-const staleDur = normalizeFilmstripPayload(
+// Coverage-based staleness (defect fix): a strip that COVERS the requested
+// span is valid even when longer (wider edit window / pre-trim strip); only a
+// strip that fails to cover the requested span is stale. Scope defaults to
+// 'none' → clip-local coordinates [0, strip duration].
+const widerStrip = normalizeFilmstripPayload(
   { clip_id: 'c1', duration: 30, interval: 3, frames: [{ url: '/f.jpg', t: 0 }] },
   { expectedDuration: 10 }
 );
-assert.equal(staleDur, null, 'Rejects mismatched duration > 1.0s');
+assert.ok(widerStrip, 'Strip covering the requested span (wider than requested) is accepted');
+
+const narrowStrip = normalizeFilmstripPayload(
+  { clip_id: 'c1', duration: 5, interval: 3, frames: [{ url: '/f.jpg', t: 0 }] },
+  { expectedDuration: 10 }
+);
+assert.equal(narrowStrip, null, 'Rejects strip that fails to cover the requested span');
 
 // Wrong clipId ownership rejected
 const wrongClip = normalizeFilmstripPayload(

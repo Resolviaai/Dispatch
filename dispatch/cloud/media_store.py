@@ -39,8 +39,9 @@ class ValidationError(MediaStoreError):
 
 
 CLIP_VIDEO = "clip_video"
+EDIT_WINDOW = "edit_window"
 THUMBNAIL = "thumbnail"
-OBJECT_KINDS = (CLIP_VIDEO, THUMBNAIL)
+OBJECT_KINDS = (CLIP_VIDEO, EDIT_WINDOW, THUMBNAIL)
 
 
 @dataclass(frozen=True)

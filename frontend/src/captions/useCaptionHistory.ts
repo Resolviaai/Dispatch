@@ -12,7 +12,7 @@ import { CaptionTrack } from './types';
  */
 export function useCaptionHistory(initialTrack: CaptionTrack | null) {
   const [track, setInternalTrack] = useState<CaptionTrack | null>(initialTrack);
-  const historyRef = useRef<CaptionTrack[]>(initialTrack ? [JSON.parse(JSON.stringify(initialTrack))] : []);
+  const historyRef = useRef<CaptionTrack[]>(initialTrack ? [structuredClone(initialTrack)] : []);
   const indexRef = useRef<number>(0);
 
   const [canUndo, setCanUndo] = useState<boolean>(false);
@@ -35,7 +35,7 @@ export function useCaptionHistory(initialTrack: CaptionTrack | null) {
       return;
     }
 
-    const cloned = JSON.parse(JSON.stringify(newTrack));
+    const cloned = structuredClone(newTrack);
     const newHistory = historyRef.current.slice(0, indexRef.current + 1);
     newHistory.push(cloned);
     if (newHistory.length > 50) {
@@ -64,7 +64,7 @@ export function useCaptionHistory(initialTrack: CaptionTrack | null) {
   const undo = useCallback((): CaptionTrack | null => {
     if (indexRef.current > 0) {
       indexRef.current -= 1;
-      const prev = JSON.parse(JSON.stringify(historyRef.current[indexRef.current]));
+      const prev = structuredClone(historyRef.current[indexRef.current]);
       setInternalTrack(prev);
       syncFlags();
       return prev;
@@ -75,7 +75,7 @@ export function useCaptionHistory(initialTrack: CaptionTrack | null) {
   const redo = useCallback((): CaptionTrack | null => {
     if (indexRef.current < historyRef.current.length - 1) {
       indexRef.current += 1;
-      const next = JSON.parse(JSON.stringify(historyRef.current[indexRef.current]));
+      const next = structuredClone(historyRef.current[indexRef.current]);
       setInternalTrack(next);
       syncFlags();
       return next;
@@ -84,7 +84,7 @@ export function useCaptionHistory(initialTrack: CaptionTrack | null) {
   }, [syncFlags]);
 
   const resetHistory = useCallback((freshTrack: CaptionTrack) => {
-    const cloned = JSON.parse(JSON.stringify(freshTrack));
+    const cloned = structuredClone(freshTrack);
     historyRef.current = [cloned];
     indexRef.current = 0;
     setInternalTrack(cloned);

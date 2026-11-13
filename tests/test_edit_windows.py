@@ -139,7 +139,7 @@ class FakeDb:
 
 
 class TestStagingPipeline(unittest.TestCase):
-    def _run(self, fail_ffmpeg=False):
+    def _run(self, fail_ffmpeg=False, words=None):
         import tempfile
         from pathlib import Path
         tmp = tempfile.mkdtemp(prefix="ew_")
@@ -156,7 +156,8 @@ class TestStagingPipeline(unittest.TestCase):
             Path(cmd[-1]).write_bytes(b"\x00" * 5000)
             return m
 
-        words = {"words": [{"word": "hi", "start": 1.0, "end": 1.5}]}
+        if words is None:
+            words = {"words": [{"word": "hi", "start": 1.0, "end": 1.5}]}
         with patch.object(ew.subprocess, "run", side_effect=fake_run), \
 \
              patch.dict(os.environ, {"DISPATCH_TOKEN_VAULT_KEY": ""}, clear=False):
@@ -177,6 +178,17 @@ class TestStagingPipeline(unittest.TestCase):
         self.assertEqual(store.reserved[3], 5000)  # actual bytes reserved
         self.assertEqual(rec["status"], "ready")
         self.assertEqual(db.events[-1][0], "ready")
+
+    def test_staging_empty_transcript_still_ready(self):
+        # Silent ranges legitimately transcribe to zero words: the proxy still
+        # stages ready (transcript_status='missing'); policy under review in
+        # docs/EDIT_WINDOW_SPECIFICATION.md Open Questions.
+        with patch.dict(os.environ, {"DISPATCH_TOKEN_VAULT_KEY": "x"}):
+            store, db, rec = self._run(words={"words": []})
+        self.assertEqual(rec["status"], "ready")
+        self.assertEqual(rec["words"], [])
+        self.assertEqual(db.events[-1][0], "ready")
+        self.assertIn(("transcript", 0), db.events)
 
     def test_staging_failure_marks_failed_and_reraises(self):
         with patch.dict(os.environ, {"DISPATCH_TOKEN_VAULT_KEY": "x"}):

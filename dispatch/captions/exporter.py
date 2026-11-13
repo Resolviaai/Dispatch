@@ -620,16 +620,34 @@ def remap_caption_track_to_timeline(
     spans: Any,
     clip_start: float = 0.0,
     source_duration: Optional[float] = None,
+    coordinate_system: str = "clip_relative",
 ) -> CaptionTrack:
-    """Remap a source/clip-relative CaptionTrack to output presentation time for cut EDL clips.
+    """Remap a caption track to output presentation time for cut EDL clips.
 
     Words and groups inside removed footage are omitted.
     Word and group boundaries are clipped to segment boundaries.
+
+    `coordinate_system` declares the space `track` timestamps live in and guards
+    the single most dangerous transform here (audit 2026-11: never apply
+    ``+clip_start`` without verifying the coordinate space):
+      - ``"clip_relative"`` (default, legacy): timestamps are relative to the
+        clip window, so they are shifted by `clip_start` into source time.
+      - ``"source_relative"``: timestamps are already source-anchored and map
+        through the EDL spans directly; `clip_start` is ignored entirely.
+      - ``"window_relative"``: timestamps are relative to an edit window whose
+        padded origin the caller passes as `clip_start`.
+    Unknown values fall back to the legacy clip-relative behavior.
     """
     if not track or not track.groups or not spans:
         return track
 
     from dispatch.segments import normalize_ranges, intersect_source_interval
+
+    coord_system = str(coordinate_system or "clip_relative").strip().lower()
+    if coord_system == "source_relative":
+        src_offset = 0.0
+    else:
+        src_offset = float(clip_start or 0.0)
 
     max_end = 0.0
     for s in spans:
@@ -658,8 +676,8 @@ def remap_caption_track_to_timeline(
         g_start = float(grp.start or 0.0)
         g_end = float(grp.end or 0.0)
 
-        grp_src_start = clip_start + g_start
-        grp_src_end = clip_start + g_end
+        grp_src_start = src_offset + g_start
+        grp_src_end = src_offset + g_end
 
         if grp_src_end <= grp_src_start:
             continue
@@ -679,8 +697,8 @@ def remap_caption_track_to_timeline(
                 for w in grp.words:
                     w_s = float(w.start or 0.0)
                     w_e = float(w.end or 0.0)
-                    w_src_s = clip_start + w_s
-                    w_src_e = clip_start + w_e
+                    w_src_s = src_offset + w_s
+                    w_src_e = src_offset + w_e
 
                     overlap_s = max(w_src_s, frag_src_s)
                     overlap_e = min(w_src_e, frag_src_e)

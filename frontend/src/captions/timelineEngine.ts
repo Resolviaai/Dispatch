@@ -239,7 +239,9 @@ export function sourceToConcat(
   sourceTime: number,
   sourceDuration: number,
 ): number | null {
-  const canonical = normalizeRanges(ranges, sourceDuration);
+  // Read-only mapping: never enforce the 5s/180s total-duration contract here or
+  // short/long kept timelines would be un-mappable for display and seeking.
+  const canonical = normalizeRanges(ranges, sourceDuration, { enforceTotal: false });
   const point = finiteNumber(sourceTime, 'source_time');
   let offset = 0;
   for (const [start, end] of canonical) {
@@ -253,7 +255,9 @@ export function sourceToConcat(
 
 /** Output point -> source time. At internal boundaries, prefer the next segment. */
 export function concatToSource(ranges: unknown, concatTime: number, sourceDuration: number): number {
-  const canonical = normalizeRanges(ranges, sourceDuration);
+  // Read-only mapping: never enforce the 5s/180s total-duration contract here or
+  // short/long kept timelines would be un-mappable for display and seeking.
+  const canonical = normalizeRanges(ranges, sourceDuration, { enforceTotal: false });
   let point = finiteNumber(concatTime, 'concat_time');
   const total = keptDuration(canonical);
   if (point < -TIME_EPSILON || point > total + TIME_EPSILON) {
@@ -278,7 +282,9 @@ export function intersectSourceInterval(
   sourceEnd: number,
   sourceDuration: number,
 ): TimelineFragment[] {
-  const canonical = normalizeRanges(ranges, sourceDuration);
+  // Read-only mapping: never enforce the 5s/180s total-duration contract here or
+  // short/long kept timelines would be un-fragmentable for display layers.
+  const canonical = normalizeRanges(ranges, sourceDuration, { enforceTotal: false });
   const layerStart = finiteNumber(sourceStart, 'source_start');
   const layerEnd = finiteNumber(sourceEnd, 'source_end');
   if (layerEnd <= layerStart) throw new TimelineError('source interval end must be greater than start');
@@ -602,7 +608,9 @@ export function remapCaptionTrackToTimeline<T extends { groups?: any[]; [key: st
 
   let canonical: TimeRange[];
   try {
-    canonical = normalizeRanges(ranges, effectiveDur);
+    // Read-only mapping: never enforce the 5s/180s total-duration contract here or
+    // short/long kept timelines would silently return the track unremapped.
+    canonical = normalizeRanges(ranges, effectiveDur, { enforceTotal: false });
   } catch {
     return track;
   }
@@ -665,12 +673,21 @@ export function remapCaptionTrackToTimeline<T extends { groups?: any[]; [key: st
         continue;
       }
 
-      const nextStart = remappedWords.length > 0 ? remappedWords[0].start : Number(frag.timeline_start.toFixed(3));
-      const nextEnd = remappedWords.length > 0 ? remappedWords[remappedWords.length - 1].end : Number(frag.timeline_end.toFixed(3));
+      // The fragment envelope (group bounds intersected with the kept segment)
+      // is authoritative. Word extents may tighten WITHIN it but must never
+      // shrink it: outward trims and Span Video enlarge the envelope beyond
+      // the word extents and that extra span has to survive remapping.
+      const wordStart = remappedWords.length > 0 ? remappedWords[0].start : frag.timeline_start;
+      const wordEnd = remappedWords.length > 0 ? remappedWords[remappedWords.length - 1].end : frag.timeline_end;
+      const nextStart = Number(Math.min(frag.timeline_start, wordStart).toFixed(3));
+      const nextEnd = Number(Math.max(frag.timeline_end, wordEnd).toFixed(3));
 
       remappedGroups.push({
         ...grp,
         id: fragments.length > 1 ? `${grp.id}_${fIdx}` : grp.id,
+        // Stable link back to the originating source group so editors can
+        // resolve fragmented ids like `grp_5_1` to their source group.
+        sourceGroupId: grp.id,
         start: nextStart,
         end: nextEnd,
         words: remappedWords.length > 0 ? remappedWords : grp.words,

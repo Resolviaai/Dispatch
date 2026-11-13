@@ -2,11 +2,50 @@
 import json
 import hashlib
 import logging
+import os
 import subprocess
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("dispatch.ingestion.validator")
+
+# probe_video spawns up to 3 ffmpeg/ffprobe processes (orientation inspect,
+# re-inspect after normalization, full-file decode validation) and is called
+# from many hot paths. Results are memoized per (resolved path, size,
+# mtime_ns): files being rewritten (temp render outputs) change size or
+# mtime_ns, so a stale entry can never be served for new content. Successful
+# results only — failures are re-probed so transient ffmpeg errors are not
+# sticky. Bounded with oldest-first eviction; hits return a defensive copy.
+_PROBE_CACHE_LOCK = threading.Lock()
+_PROBE_CACHE: "OrderedDict[Tuple[str, int, int], Tuple[bool, Dict[str, Any], Optional[str]]]" = OrderedDict()
+_PROBE_CACHE_MAX_ENTRIES = 256
+
+
+def _probe_cache_key(filepath: Path) -> Optional[Tuple[str, int, int]]:
+    try:
+        resolved = filepath.resolve()
+        stat = resolved.stat()
+        return (os.path.normcase(str(resolved)), int(stat.st_size), int(stat.st_mtime_ns))
+    except OSError:
+        return None
+
+
+def _probe_cache_get(cache_key: Tuple[str, int, int]) -> Optional[Tuple[bool, Dict[str, Any], Optional[str]]]:
+    with _PROBE_CACHE_LOCK:
+        cached = _PROBE_CACHE.get(cache_key)
+        if cached is not None:
+            # Refresh LRU position.
+            _PROBE_CACHE.move_to_end(cache_key)
+        return cached
+
+
+def _probe_cache_put(cache_key: Tuple[str, int, int], result: Tuple[bool, Dict[str, Any], Optional[str]]) -> None:
+    with _PROBE_CACHE_LOCK:
+        _PROBE_CACHE[cache_key] = result
+        while len(_PROBE_CACHE) > _PROBE_CACHE_MAX_ENTRIES:
+            _PROBE_CACHE.popitem(last=False)
 
 
 def calculate_file_hash(filepath: Path, block_size: int = 65536) -> str:
@@ -198,11 +237,29 @@ def probe_video(
     if not filepath.exists() or filepath.stat().st_size == 0:
         return False, {}, "File does not exist or is empty"
 
-    # 1. Orientation normalization if video has non-zero rotation metadata
+    # 1. Memoized result check. The key includes size + mtime_ns, so a hit
+    # proves the file is byte-identical to the previously probed (and already
+    # normalized) content: skip orientation inspection + decode entirely.
+    cache_key = _probe_cache_key(filepath)
+    if cache_key is not None:
+        cached = _probe_cache_get(cache_key)
+        if cached is not None:
+            # Return a copy: callers may mutate the metadata dict.
+            return cached[0], dict(cached[1]), cached[2]
+
+    # 2. Orientation normalization if video has non-zero rotation metadata.
+    # This may rewrite the file, so the cache key is (re)derived afterwards.
     if auto_normalize:
         norm_success, filepath, _ = normalize_video_orientation(filepath, chunk_id=chunk_id)
 
-    # 2. Extract final probed metadata
+    # 3. Extract final probed metadata (re-checking the cache: a concurrent
+    # caller may have just probed the post-normalization file).
+    cache_key = _probe_cache_key(filepath)
+    if cache_key is not None:
+        cached = _probe_cache_get(cache_key)
+        if cached is not None:
+            return cached[0], dict(cached[1]), cached[2]
+
     info = inspect_video_orientation(filepath)
     if not info.get("valid"):
         return False, {}, info.get("error", "Failed to probe video")
@@ -217,7 +274,7 @@ def probe_video(
     if effective_width <= 0 or effective_height <= 0:
         return False, {}, f"Invalid dimensions: {effective_width}x{effective_height}"
 
-    # 3. Real FFmpeg decode validation: verify decodable frames
+    # 4. Real FFmpeg decode validation: verify decodable frames
     decode_cmd = [
         "ffmpeg",
         "-v", "error",
@@ -236,7 +293,7 @@ def probe_video(
         # inconclusive instead of deleting a good download and re-fetching it.
         decode_verified = False
 
-    # 4. Detect canonical aspect ratio
+    # 5. Detect canonical aspect ratio
     ratio_val = effective_width / effective_height
     if 0.5 <= ratio_val <= 0.65:
         aspect_ratio = "9:16"  # Portrait
@@ -258,5 +315,8 @@ def probe_video(
         "size_bytes": filepath.stat().st_size,
         "decode_verified": decode_verified,
     }
+
+    if cache_key is not None:
+        _probe_cache_put(cache_key, (True, dict(metadata), None))
 
     return True, metadata, None

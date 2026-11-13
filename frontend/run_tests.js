@@ -26,6 +26,8 @@ async function run() {
     await server.ssrLoadModule('/frontend/test_edl_playback_gap_skip.ts');
     await server.ssrLoadModule('/frontend/test_approval_rollback.ts');
     await server.ssrLoadModule('/frontend/test_autocut_redesign.ts');
+    await server.ssrLoadModule('/frontend/test_timeline_coord_fixes.ts');
+    await server.ssrLoadModule('/frontend/test_caption_p0_fixes.ts');
   } catch (err) {
     console.error('Test execution failed:', err);
     process.exit(1);

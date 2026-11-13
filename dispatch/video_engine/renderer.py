@@ -121,6 +121,29 @@ def render_clip(
     else:
         captured_track = sub_opts.get("caption_track")
         existing_cap_json = db.get_clip_caption_data(clip_id) if captured_track is None else None
+        # Caption coordinate-space guard (audit 2026-11): a saved track may be
+        # clip-relative, edit-window-relative, or source-anchored. Only verified
+        # clip-relative tracks shift by start_time; source-anchored tracks map
+        # through the EDL spans unshifted, and window-relative tracks anchor at
+        # the clip's padded window origin when it is recorded.
+        clip_coord = str((clip_at_start or {}).get("caption_coordinate_system") or "clip_relative").strip().lower()
+        if clip_coord == "source_relative":
+            caption_anchor = 0.0
+        elif clip_coord == "window_relative":
+            padded_start = (clip_at_start or {}).get("padded_start")
+            try:
+                padded_val = float(padded_start) if padded_start is not None else None
+            except (TypeError, ValueError):
+                padded_val = None
+            if padded_val is not None and padded_val == padded_val and padded_val >= 0.0:
+                caption_anchor = padded_val
+            else:
+                # Window origin unknown: keep the historical anchor rather than
+                # inventing one (legacy clips never recorded padded_start).
+                caption_anchor = float(start_time or 0.0)
+        else:
+            clip_coord = "clip_relative"
+            caption_anchor = float(start_time or 0.0)
         effective_spans = timeline_spans if (timeline_spans and len(timeline_spans) > 1) else (
             build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else None
         )
@@ -130,7 +153,9 @@ def render_clip(
                 from dispatch.captions.exporter import export_to_ass, remap_caption_track_to_timeline
                 track = CaptionTrack.from_dict(captured_track)
                 if effective_spans:
-                    track = remap_caption_track_to_timeline(track, effective_spans, clip_start=start_time)
+                    track = remap_caption_track_to_timeline(
+                        track, effective_spans, clip_start=caption_anchor, coordinate_system=clip_coord
+                    )
                 export_to_ass(track, ass_path)
             except Exception as e:
                 logger.warning("Failed to export captured CaptionTrack for clip %s: %s", clip_id, e)
@@ -143,7 +168,9 @@ def render_clip(
                 from dispatch.captions.exporter import export_to_ass, remap_caption_track_to_timeline
                 track = CaptionTrack.from_dict(json.loads(existing_cap_json))
                 if effective_spans:
-                    track = remap_caption_track_to_timeline(track, effective_spans, clip_start=start_time)
+                    track = remap_caption_track_to_timeline(
+                        track, effective_spans, clip_start=caption_anchor, coordinate_system=clip_coord
+                    )
                 export_to_ass(track, ass_path)
             except Exception as e:
                 logger.error("Failed to export existing CaptionTrack for clip %s: %s", clip_id, e)

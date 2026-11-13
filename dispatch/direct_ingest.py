@@ -85,34 +85,68 @@ def _request_media_url(user_id: str, object_id: str, video_id: str) -> str:
 
 
 def _download_direct_video(url: str, video_id: str) -> Path:
-    """Stream the object to `dir_<id>.mp4` (`.part` while transferring)."""
+    """Stream the object to `dir_<id>.mp4` (`.part` while transferring).
+
+    Uses a bounded retry loop (3 attempts) that resumes mid-file with a
+    ``Range: bytes={part_size}-`` header whenever a ``.part`` file survives a
+    transient drop, so a connection failure at 90% no longer discards the partial
+    download. Servers are expected to answer 206; if one ignores the Range header
+    and replies 200, the transfer restarts from byte 0 (the file is truncated).
+    The 512 MiB object cap and the ``.part`` -> ``os.replace`` atomic rename are
+    preserved.
+    """
     target = Path(YOUTUBE_INBOX_DIR) / f"{video_id}.mp4"
     YOUTUBE_INBOX_DIR.mkdir(parents=True, exist_ok=True)
     part = target.with_name(target.name + ".part")
-    part.unlink(missing_ok=True)
-    received = 0
+    max_attempts = 3
     try:
-        with requests.get(url, stream=True, timeout=_STREAM_TIMEOUT, headers={"User-Agent": "Dispatch-PC/1.0"}) as resp:
-            resp.raise_for_status()
-            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            if ctype and ctype not in ("video/mp4", "application/octet-stream", "binary/octet-stream"):
-                raise RuntimeError(f"unexpected content type {ctype!r} for direct video")
-            with open(part, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=1 << 20):
-                    if not chunk:
-                        continue
-                    received += len(chunk)
-                    if received > DIRECT_DOWNLOAD_CAP_BYTES:
-                        raise RuntimeError("direct video exceeds the 512 MiB object cap mid-download")
-                    fh.write(chunk)
-        if received <= 0:
-            raise RuntimeError("direct video download produced an empty file")
+        for attempt in range(max_attempts):
+            resume_from = part.stat().st_size if part.exists() else 0
+            headers = {"User-Agent": "Dispatch-PC/1.0"}
+            mode = "wb"
+            if resume_from > 0:
+                headers["Range"] = f"bytes={resume_from}-"
+                mode = "ab"
+            received = 0
+            try:
+                with requests.get(url, stream=True, timeout=_STREAM_TIMEOUT, headers=headers) as resp:
+                    resp.raise_for_status()
+                    if resume_from > 0 and resp.status_code != 206:
+                        # Server ignored the Range header: the body starts at byte 0.
+                        resume_from = 0
+                        mode = "wb"
+                    ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                    if ctype and ctype not in ("video/mp4", "application/octet-stream", "binary/octet-stream"):
+                        raise RuntimeError(f"unexpected content type {ctype!r} for direct video")
+                    with open(part, mode) as fh:
+                        for chunk in resp.iter_content(chunk_size=1 << 20):
+                            if not chunk:
+                                continue
+                            received += len(chunk)
+                            if resume_from + received > DIRECT_DOWNLOAD_CAP_BYTES:
+                                raise RuntimeError("direct video exceeds the 512 MiB object cap mid-download")
+                            fh.write(chunk)
+            except requests.RequestException as exc:
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "Direct video %s download attempt %d/%d failed (%s); %s",
+                        video_id, attempt + 1, max_attempts, exc,
+                        f"resuming from byte {part.stat().st_size}" if part.exists() else "retrying from scratch",
+                    )
+                    continue
+                raise
+            if resume_from + received <= 0:
+                raise RuntimeError("direct video download produced an empty file")
+            break
         os.replace(part, target)
     except Exception:
         part.unlink(missing_ok=True)
         target.unlink(missing_ok=True)
         raise
-    logger.info("Direct video %s downloaded via presigned URL (%.1f MB)", video_id, received / (1024 * 1024))
+    logger.info(
+        "Direct video %s downloaded via presigned URL (%.1f MB)",
+        video_id, target.stat().st_size / (1024 * 1024),
+    )
     return target
 
 

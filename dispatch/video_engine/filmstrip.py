@@ -26,6 +26,7 @@ import math
 import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -309,16 +310,34 @@ def generate_filmstrip(
         staging.mkdir(parents=True, exist_ok=True)
 
         manifest_frames: List[Dict[str, Any]] = []
-        for index, axis_time in enumerate(axis_times):
-            slot_t = round(index * interval, 6)
-            frame_name = f"f{index:02d}.jpg"
-            out_path = staging / frame_name
-            if not _extract_slot(active_video, axis_time, out_path):
+        slot_jobs = [
+            (index, axis_time, f"f{index:02d}.jpg")
+            for index, axis_time in enumerate(axis_times)
+        ]
+        # Per-slot ffmpeg extractions are independent one-frame seeks; run them
+        # concurrently (bounded to a small worker pool so a 16-slot strip cannot
+        # stampede the machine). Each slot writes its own staging file, so the
+        # workers never share mutable state.
+        slot_results: Dict[int, bool] = {}
+        max_workers = max(1, min(4, os.cpu_count() or 2))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_extract_slot, active_video, axis_time, staging / frame_name): index
+                for index, axis_time, frame_name in slot_jobs
+            }
+            for future in futures:
+                # result() re-raises worker exceptions so a crashing slot fails
+                # the whole strip (handled by the outer guard below) instead of
+                # silently writing a truncated manifest.
+                slot_results[futures[future]] = bool(future.result())
+
+        for index, _axis_time, frame_name in slot_jobs:
+            if not slot_results.get(index, False):
                 continue  # gap tolerated; the manifest records only real frames
             manifest_frames.append({
                 "name": frame_name,
                 "index": index,
-                "t": slot_t,
+                "t": round(index * interval, 6),
             })
 
         manifest = {

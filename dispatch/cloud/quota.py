@@ -10,10 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dispatch.cloud.media_store import CLIP_VIDEO, THUMBNAIL
+from dispatch.cloud.media_store import CLIP_VIDEO, EDIT_WINDOW, THUMBNAIL
 
+# Mirrors the Supabase/Worker reserve contract (migrations 00011/00018/00023 and
+# cloud-worker KINDS/CAP_BYTES): edit_window proxies are video/mp4 up to 512 MiB,
+# the same cap as clip_video.
 ALLOWED_MIME_TYPES = {
     CLIP_VIDEO: frozenset({"video/mp4"}),
+    EDIT_WINDOW: frozenset({"video/mp4"}),
     THUMBNAIL: frozenset({"image/jpeg"}),
 }
 
@@ -64,7 +68,9 @@ def evaluate_upload_reservation(
     if expected_bytes <= 0:
         return QuotaDecision(False, "Expected byte count must be positive")
 
-    kind_cap = max_clip_object_bytes if object_kind == CLIP_VIDEO else max_thumbnail_bytes
+    kind_cap = (
+        max_clip_object_bytes if object_kind in (CLIP_VIDEO, EDIT_WINDOW) else max_thumbnail_bytes
+    )
     if expected_bytes > kind_cap:
         return QuotaDecision(
             False,

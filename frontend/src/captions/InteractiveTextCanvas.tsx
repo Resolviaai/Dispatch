@@ -59,6 +59,115 @@ interface CanvasGroupItemProps {
   isInteractive: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Memoization helpers for CanvasGroupItem
+//
+// Playback re-renders arrive at 60fps; a group whose rendered output is
+// provably identical at the new time must be skipped. The comparator therefore
+// reasons about (a) identity of everything the item renders and (b) whether
+// the time-driven visuals (enter/exit/loop animations, spoken-word highlight,
+// word pop punch) differ between prevTime and nextTime.
+// ---------------------------------------------------------------------------
+
+function isSameCanvasGroup(a: CaptionGroup, b: CaptionGroup): boolean {
+  if (a === b) return true;
+  return (
+    a.id === b.id &&
+    a.start === b.start &&
+    a.end === b.end &&
+    a.text === b.text &&
+    a.type === b.type &&
+    a.words === b.words &&
+    a.style === b.style &&
+    a.layout === b.layout &&
+    a.animation === b.animation &&
+    a.is_hidden === b.is_hidden &&
+    (a as any).has_word_timing === (b as any).has_word_timing &&
+    (a as any).timing_mode === (b as any).timing_mode
+  );
+}
+
+function isCanvasGroupTimeStateEqual(group: CaptionGroup, anim: any, prevTime: number, nextTime: number): boolean {
+  if (prevTime === nextTime) return true;
+
+  const start = group.start;
+  const end = group.end;
+
+  // Enter window: opacity/transform animate on every frame inside it.
+  const enterType = anim?.enter?.type || anim?.enter_type || 'none';
+  const enterDur = (anim?.enter?.duration_ms || anim?.enter_duration_ms || 200) / 1000;
+  if (enterType !== 'none' && enterDur > 0) {
+    if ((prevTime >= start && prevTime - start < enterDur) || (nextTime >= start && nextTime - start < enterDur)) {
+      return false;
+    }
+  }
+
+  // Exit window.
+  const exitType = anim?.exit?.type || anim?.exit_type || 'none';
+  const exitDur = (anim?.exit?.duration_ms || anim?.exit_duration_ms || 150) / 1000;
+  if (exitType !== 'none' && exitDur > 0) {
+    if ((prevTime <= end && end - prevTime < exitDur) || (nextTime <= end && end - nextTime < exitDur)) {
+      return false;
+    }
+  }
+
+  // Loop animations are continuous functions of time.
+  const loopType = anim?.loop?.type || anim?.loop_type || 'none';
+  if (loopType === 'pulse' || loopType === 'wiggle') return false;
+
+  const words = group.words || [];
+  if (words.length === 0) return true;
+
+  const hasWordTiming =
+    (group as any).has_word_timing !== false &&
+    (group as any).timing_mode !== 'phrase' &&
+    words.some((w) => typeof w.start === 'number' && typeof w.end === 'number');
+  if (!hasWordTiming) return true;
+
+  // Spoken-word highlight set: re-render whenever membership changes.
+  for (const w of words) {
+    if (typeof w.start !== 'number' || typeof w.end !== 'number') continue;
+    const prevSpoken = prevTime >= w.start && prevTime <= w.end;
+    const nextSpoken = nextTime >= w.start && nextTime <= w.end;
+    if (prevSpoken !== nextSpoken) return false;
+  }
+
+  // Word pop punch: animates every frame inside the pop window of the word
+  // being spoken (membership equality above guarantees it is the same word).
+  const activeAnimType = anim?.active_word?.type || anim?.type;
+  if (activeAnimType === 'pop' || activeAnimType === 'bounce') {
+    const popDur = (anim?.active_word?.duration_ms || anim?.duration_ms || 100) / 1000;
+    for (const w of words) {
+      if (typeof w.start !== 'number' || typeof w.end !== 'number') continue;
+      const prevElapsed = prevTime - w.start;
+      const nextElapsed = nextTime - w.start;
+      const prevInPop = prevElapsed >= 0 && prevElapsed < popDur && prevTime <= w.end;
+      const nextInPop = nextElapsed >= 0 && nextElapsed < popDur && nextTime <= w.end;
+      if (prevInPop || nextInPop) return false;
+    }
+  }
+
+  return true;
+}
+
+function areCanvasGroupPropsEqual(prev: CanvasGroupItemProps, next: CanvasGroupItemProps): boolean {
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.layoutMode !== next.layoutMode) return false;
+  if (prev.isInteractive !== next.isInteractive) return false;
+  if (prev.containerRef !== next.containerRef) return false;
+  if (prev.defaultStyle !== next.defaultStyle) return false;
+  if (prev.defaultLayout !== next.defaultLayout) return false;
+  if (prev.defaultAnimation !== next.defaultAnimation) return false;
+  // Callbacks are intentionally NOT compared: they are routed through stable
+  // latest-refs in InteractiveTextCanvas, so their identity never carries
+  // behavior the comparator could miss.
+
+  if (!isSameCanvasGroup(prev.group, next.group)) return false;
+
+  const anim = next.group.animation || next.defaultAnimation;
+  return isCanvasGroupTimeStateEqual(next.group, anim, prev.currentTime, next.currentTime);
+}
+
 const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
   group,
   defaultStyle,
@@ -192,6 +301,43 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
     } catch {}
   };
 
+  // Pointercancel (incoming call, browser gesture takeover, etc.) aborts the
+  // gesture: restore the pre-gesture transform instead of committing the last
+  // transient patch. The restore itself is transient — the pre-gesture value is
+  // already the latest committed history snapshot.
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    if (isDragging) {
+      onUpdateGroup(
+        group.id,
+        {
+          layout: {
+            ...layout,
+            position_x: dragStartRef.current.initialX,
+            position_y: dragStartRef.current.initialY,
+          },
+        },
+        false
+      );
+    } else if (isResizing) {
+      onUpdateGroup(
+        group.id,
+        {
+          layout: {
+            ...layout,
+            scale: resizeStartRef.current.initialScale,
+          },
+        },
+        false
+      );
+    }
+    latestPatchRef.current = null;
+    setIsDragging(false);
+    setIsResizing(false);
+    try {
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
   const handleResizePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     const rect = containerRef.current?.getBoundingClientRect() || { width: 393, height: 700 };
@@ -271,7 +417,7 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
     <div
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       style={{
         position: 'absolute',
         left: `${posX * 100}%`,
@@ -459,7 +605,7 @@ const CanvasGroupItem: React.FC<CanvasGroupItemProps> = React.memo(({
       </div>
     </div>
   );
-});
+}, areCanvasGroupPropsEqual);
 
 export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
   track,
@@ -473,6 +619,30 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
   isInteractive = true
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Latest-ref routing: callers recreate these handlers on every render, which
+  // previously forced every CanvasGroupItem to re-render at 60fps and made any
+  // callback-ignoring memo comparator unsafe. The wrappers keep a stable
+  // identity while always invoking the freshest callback; the refs are
+  // refreshed on each render of this (unmemoized) component — i.e. whenever a
+  // new handler could possibly have arrived.
+  const onSelectGroupRef = useRef(onSelectGroup);
+  onSelectGroupRef.current = onSelectGroup;
+  const onOpenTextEditorRef = useRef(onOpenTextEditor);
+  onOpenTextEditorRef.current = onOpenTextEditor;
+  const onUpdateGroupRef = useRef(onUpdateGroup);
+  onUpdateGroupRef.current = onUpdateGroup;
+  const onApplyLayoutToAllRef = useRef(onApplyLayoutToAll);
+  onApplyLayoutToAllRef.current = onApplyLayoutToAll;
+
+  const stableSelectGroup = useCallback((groupId: string | null) => onSelectGroupRef.current(groupId), []);
+  const stableOpenTextEditor = useCallback((groupId: string) => onOpenTextEditorRef.current?.(groupId), []);
+  const stableUpdateGroup = useCallback(
+    (groupId: string, patch: Partial<CaptionGroup>, commitToHistory?: boolean) =>
+      onUpdateGroupRef.current(groupId, patch, commitToHistory),
+    []
+  );
+  const stableApplyLayoutToAll = useCallback((groupId: string) => onApplyLayoutToAllRef.current?.(groupId), []);
 
   if (!track || !track.groups || track.groups.length === 0) {
     return null;
@@ -504,10 +674,10 @@ export const InteractiveTextCanvas: React.FC<InteractiveTextCanvasProps> = ({
           isSelected={selectedGroupId === grp.id}
           currentTime={currentTime}
           containerRef={containerRef}
-          onSelectGroup={onSelectGroup}
-          onOpenTextEditor={onOpenTextEditor}
-          onUpdateGroup={onUpdateGroup}
-          onApplyLayoutToAll={onApplyLayoutToAll}
+          onSelectGroup={stableSelectGroup}
+          onOpenTextEditor={stableOpenTextEditor}
+          onUpdateGroup={stableUpdateGroup}
+          onApplyLayoutToAll={stableApplyLayoutToAll}
           layoutMode={layoutMode}
           isInteractive={isInteractive}
         />

@@ -1,9 +1,14 @@
 package com.resolvia.dispatch.sync
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.BufferedInputStream
@@ -438,5 +443,34 @@ class YouTubeDirectUploadWorkerTest {
         assertEquals(uuid, YouTubeDirectUploadWorker.extractMediaObjectIdFromR2Key(uuid))
         assertNull(YouTubeDirectUploadWorker.extractMediaObjectIdFromR2Key("not-a-uuid"))
         assertNull(YouTubeDirectUploadWorker.extractMediaObjectIdFromR2Key(null))
+    }
+
+    @Test
+    fun sharedClient_isProcessWideSingleton_withUploadTimeouts() {
+        // Every worker instance must reuse the shared client (fresh clients per
+        // worker run leaked connection pools/dispatcher threads and paid new
+        // TCP+TLS handshakes).
+        val first = YouTubeDirectUploadWorker.sharedClient
+        val second = YouTubeDirectUploadWorker.sharedClient
+        assertSame(first, second)
+        assertEquals(30_000, first.connectTimeoutMillis)
+        assertEquals(300_000, first.writeTimeoutMillis)
+        assertEquals(300_000, first.readTimeoutMillis)
+    }
+
+    @Test
+    fun reusedChunkBuffer_bodyWritesOnlyTheExplicitChunkLength() {
+        // Regression for the per-slice ByteArray(chunkLen) allocation: the
+        // hoisted 8 MB buffer is reused across slices, and the request body
+        // must serialize exactly buffer[0, chunkLen) with Content-Length ==
+        // chunkLen — the final partial chunk must not over-send or copy.
+        val buffer = ByteArray(64) { it.toByte() }
+        val chunkLen = 17
+        val body = buffer.toRequestBody("video/mp4".toMediaType(), 0, chunkLen)
+
+        assertEquals(chunkLen.toLong(), body.contentLength())
+        val sink = Buffer()
+        body.writeTo(sink)
+        assertArrayEquals(buffer.copyOfRange(0, chunkLen), sink.readByteArray())
     }
 }

@@ -295,6 +295,14 @@ def analyze_waveform_and_transcript_autocuts(
 
     # 1b. Acoustic defect and breath detection via waveform analysis
     if pcm_bytes:
+        # Active speech spans (source seconds) gate the transient-click detector:
+        # broadband spikes inside words are plosives, not mic defects. An empty
+        # list gates nothing, matching the legacy ungated behavior.
+        speech_intervals = [
+            (float(w.get("start", 0.0)), float(w.get("end", 0.0)))
+            for w in all_words
+            if float(w.get("end", 0.0)) > float(w.get("start", 0.0))
+        ]
         clipping_events = detect_audio_clipping(pcm_bytes, sample_rate=16000)
         for ev in clipping_events:
             if ev["source_end"] > clip_start and ev["source_start"] < clip_end:
@@ -310,7 +318,7 @@ def analyze_waveform_and_transcript_autocuts(
                     "decision": "REVIEW",
                 })
 
-        click_events = detect_transient_clicks(pcm_bytes, sample_rate=16000)
+        click_events = detect_transient_clicks(pcm_bytes, sample_rate=16000, speech_intervals=speech_intervals)
         for ev in click_events:
             if ev["source_end"] > clip_start and ev["source_start"] < clip_end:
                 proposals.append({
@@ -326,11 +334,6 @@ def analyze_waveform_and_transcript_autocuts(
                 })
 
         if all_words:
-            speech_intervals = [
-                (float(w.get("start", 0.0)), float(w.get("end", 0.0)))
-                for w in all_words
-                if float(w.get("end", 0.0)) > float(w.get("start", 0.0))
-            ]
             breath_events = detect_breaths_and_coughs(pcm_bytes, speech_intervals, sample_rate=16000)
             for ev in breath_events:
                 if ev["source_end"] > clip_start and ev["source_start"] < clip_end:

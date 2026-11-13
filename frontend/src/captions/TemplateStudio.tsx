@@ -33,6 +33,7 @@ import { CaptionStudio, ActivePanel } from './CaptionStudio';
 import { CaptionTimeline } from './CaptionTimeline';
 import { FilmstripData, normalizeFilmstripPayload } from './filmstrip';
 import { useCaptionHistory } from './useCaptionHistory';
+import { getSavedTemplateStorageKey, saveDefaultTemplate } from './normalizeTrack';
 import { applySectionStylesToTrack } from './applyToAll';
 import {
   FramedVideoStage,
@@ -220,7 +221,11 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
     let localSavedTime = 0;
     if (typeof localStorage !== 'undefined') {
       try {
-        const cached = localStorage.getItem('dispatch_default_template');
+        // Resolve the same per-user template key normalizeCaptionTrack reads:
+        // TemplateStudio has no explicit userId, so the helper falls back to the
+        // active user id ('dispatch_active_user_id' / 'sb_user_id') and only uses
+        // the legacy un-namespaced key when no user id is available.
+        const cached = localStorage.getItem(getSavedTemplateStorageKey());
         if (cached) {
           const parsed = JSON.parse(cached);
           if (parsed && typeof parsed === 'object') {
@@ -249,7 +254,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
             if (!localSavedTime || backendTime > localSavedTime) {
               applyLoadedTemplate(data);
               if (typeof localStorage !== 'undefined') {
-                localStorage.setItem('dispatch_default_template', JSON.stringify(data));
+                saveDefaultTemplate(data);
               }
               return;
             }
@@ -284,7 +289,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
               if (!localSavedTime || cloudTime > localSavedTime) {
                 applyLoadedTemplate(template);
                 if (typeof localStorage !== 'undefined') {
-                  localStorage.setItem('dispatch_default_template', JSON.stringify(template));
+                  saveDefaultTemplate(template);
                 }
               }
             }
@@ -477,9 +482,10 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
         updated_at: new Date().toISOString(),
       };
 
-      // 1. Immediately cache in localStorage (0ms guaranteed)
+      // 1. Immediately cache in localStorage (0ms guaranteed) under the same
+      // per-user key normalizeCaptionTrack reads back.
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('dispatch_default_template', JSON.stringify(payload));
+        saveDefaultTemplate(payload);
       }
 
       // 2. Sync to PC and Cloud in parallel with resilient timeouts
@@ -497,7 +503,7 @@ export const TemplateStudio: React.FC<TemplateStudioProps> = ({
             const resData = await res.json().catch(() => null);
             const savedTpl = (resData && resData.template) ? resData.template : resData;
             if (savedTpl && typeof savedTpl === 'object' && typeof localStorage !== 'undefined') {
-              localStorage.setItem('dispatch_default_template', JSON.stringify(savedTpl));
+              saveDefaultTemplate(savedTpl);
             }
             return { target: 'pc', success: true };
           }

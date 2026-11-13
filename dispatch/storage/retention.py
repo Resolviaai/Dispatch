@@ -62,7 +62,10 @@ TERMINAL_SOURCE_STATUSES = {
 ACTIVE_PIPELINE_JOB_STATUSES = {
     "QUEUED", "PROCESSING", "WAITING_FOR_AI", "WAITING_FOR_RESOURCES", "RETRY_PENDING",
 }
-PENDING_CLIP_STATUSES = {"queued_transcription", "approved"}
+# Clip statuses that mean the creator has not finished reviewing/publishing the
+# clip yet ('ready_review' is the DEFAULT clip status per dispatch/db.py), so any
+# source video holding such a clip must never be purged by retention.
+PENDING_CLIP_STATUSES = {"queued_transcription", "ready_review", "approved"}
 TERMINAL_OUTBOX_STATUSES = {"published", "cancelled"}
 
 

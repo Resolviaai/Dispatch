@@ -8,6 +8,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.InputStream
+import java.io.RandomAccessFile
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -51,6 +52,9 @@ object RecordingHttpServer {
     private const val MAX_LINE = 8 * 1024
     private const val WORKER_COUNT = 6
     private const val SHELL_ORIGIN = "http://appassets.androidplatform.net"
+
+    /** Hard cap on requests served over a single keep-alive connection. */
+    internal const val MAX_REQUESTS_PER_CONNECTION = 100
 
     @Volatile private var serverSocket: ServerSocket? = null
     @Volatile private var acceptThread: Thread? = null
@@ -138,48 +142,112 @@ object RecordingHttpServer {
     }
 
     private fun handle(client: Socket) {
+        handleConnection(client, token, roots)
+    }
+
+    /**
+     * Serves requests on one socket. Conservative HTTP/1.1 keep-alive: requests
+     * are read sequentially from the same socket while the client permits reuse
+     * (HTTP/1.1 default, HTTP/1.0 opt-in via `Connection: keep-alive`) and a
+     * reusable media response was served. Error replies (400/403/404/405/416)
+     * keep the previous close-after-response behaviour. Connection lifetime is
+     * bounded by [MAX_REQUESTS_PER_CONNECTION] and the socket read timeout, so
+     * an idle keep-alive connection is reaped after [CONNECTION_TIMEOUT_MS].
+     *
+     * One [RandomAccessFile] is opened per connection and reused across requests
+     * for the same file (re-opened when a request targets another file), closing
+     * in `finally` — a scrubbing player no longer pays an open/close per range
+     * request. Sequential range requests on one connection each get correct 206
+     * responses.
+     *
+     * Internal (not private) so JVM unit tests can drive the loop directly.
+     */
+    internal fun handleConnection(client: Socket, activeToken: String, activeRoots: List<File>) {
         try {
             client.soTimeout = CONNECTION_TIMEOUT_MS
             client.use { socket ->
                 val input = BufferedInputStream(socket.getInputStream())
                 val output = BufferedOutputStream(socket.getOutputStream())
+                var raf: RandomAccessFile? = null
+                var rafTarget: File? = null
+                try {
+                    var requestsServed = 0
+                    while (requestsServed < MAX_REQUESTS_PER_CONNECTION) {
+                        val requestLine = readLine(input) ?: return
+                        val headers = readHeaders(input)
 
-                val requestLine = readLine(input) ?: return
-                val rangeHeader = readHeaders(input)
+                        val parts = requestLine.split(' ')
+                        if (parts.size < 2) return writeText(output, 400, "Bad Request")
+                        val method = parts[0].uppercase()
+                        if (method != "GET" && method != "HEAD") {
+                            return writeText(output, 405, "Method Not Allowed")
+                        }
+                        val target = parts[1].substringBefore('?')
+                        val prefix = "/$activeToken/recordings/"
+                        if (!target.startsWith(prefix)) {
+                            // Wrong/absent token: do not reveal whether a file exists.
+                            return writeText(output, 403, "Forbidden")
+                        }
+                        val requestedName = target.removePrefix(prefix)
+                        val file = RecordingMediaPolicy.resolveRecordingPath(requestedName, activeRoots[0], activeRoots[1])
+                            ?: return writeText(output, 404, "Not Found")
+                        if (!file.isFile || file.length() <= 0L) {
+                            return writeText(output, 404, "Not Found")
+                        }
 
-                val parts = requestLine.split(' ')
-                if (parts.size < 2) return writeText(output, 400, "Bad Request")
-                val method = parts[0].uppercase()
-                if (method != "GET" && method != "HEAD") {
-                    return writeText(output, 405, "Method Not Allowed")
-                }
-                val target = parts[1].substringBefore('?')
-                val prefix = "/$token/recordings/"
-                if (!target.startsWith(prefix)) {
-                    // Wrong/absent token: do not reveal whether a file exists.
-                    return writeText(output, 403, "Forbidden")
-                }
-                val requestedName = target.removePrefix(prefix)
-                val file = RecordingMediaPolicy.resolveRecordingPath(requestedName, roots[0], roots[1])
-                    ?: return writeText(output, 404, "Not Found")
-                if (!file.isFile || file.length() <= 0L) {
-                    return writeText(output, 404, "Not Found")
-                }
+                        if (raf == null || rafTarget !== file) {
+                            try { raf?.close() } catch (_: Exception) {}
+                            raf = RandomAccessFile(file, "r")
+                            rafTarget = file
+                        }
 
-                serveMedia(socket, output, file, rangeHeader, method == "HEAD")
+                        val keepAlive = clientWantsKeepAlive(requestLine, headers.connection)
+                        val persisted = serveMedia(
+                            output, raf, file, headers.range,
+                            method == "HEAD", keepAlive = keepAlive
+                        )
+                        if (!persisted) return
+                        requestsServed++
+                    }
+                } finally {
+                    try { raf?.close() } catch (_: Exception) {}
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "request failed: ${e.message}")
         }
     }
 
+    /**
+     * Conservative keep-alive decision: HTTP/1.1 defaults to reuse unless the
+     * client sends `Connection: close`; HTTP/1.0 must opt in; unknown or absent
+     * versions always close.
+     */
+    private fun clientWantsKeepAlive(requestLine: String, connectionHeader: String?): Boolean {
+        val directives = connectionHeader?.split(',')?.map { it.trim() } ?: emptyList()
+        if (directives.any { it.equals("close", ignoreCase = true) }) return false
+        val version = requestLine.split(' ').getOrNull(2) ?: return false
+        return when {
+            version.contains("HTTP/1.1") -> true
+            version.contains("HTTP/1.0") -> directives.any { it.equals("keep-alive", ignoreCase = true) }
+            else -> false
+        }
+    }
+
+    /**
+     * Writes one media response. Returns true when the connection may persist
+     * for another request (client keep-alive plus a successful 200/206 reply);
+     * false when it must close (client requested close, or an unsatisfiable /
+     * non-reusable reply was sent).
+     */
     private fun serveMedia(
-        socket: Socket,
         output: BufferedOutputStream,
+        raf: RandomAccessFile,
         file: File,
         rangeHeader: String?,
-        headOnly: Boolean
-    ) {
+        headOnly: Boolean,
+        keepAlive: Boolean
+    ): Boolean {
         val length = file.length()
         val mime = RecordingMediaPolicy.mediaMimeFor(file.name)
         val resolved = RecordingMediaPolicy.resolveRange(rangeHeader, length)
@@ -192,7 +260,7 @@ object RecordingHttpServer {
             )
             if (!headOnly) output.write(body)
             output.flush()
-            return
+            return false
         }
 
         val start: Long
@@ -213,24 +281,23 @@ object RecordingHttpServer {
             reason = "OK"
         }
         val contentLength = end - start + 1
-        writeHead(output, status, reason, mime, contentLength, extra)
+        writeHead(output, status, reason, mime, contentLength, extra, keepAlive = keepAlive)
         if (!headOnly) {
             // Plain chunked copy: predictable memory use and no dependence on
             // FileChannel.transferTo semantics against a socket-backed stream.
             val buffer = ByteArray(64 * 1024)
-            java.io.RandomAccessFile(file, "r").use { raf ->
-                raf.seek(start)
-                var remaining = contentLength
-                while (remaining > 0) {
-                    val wanted = minOf(buffer.size.toLong(), remaining).toInt()
-                    val read = raf.read(buffer, 0, wanted)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    remaining -= read
-                }
+            raf.seek(start)
+            var remaining = contentLength
+            while (remaining > 0) {
+                val wanted = minOf(buffer.size.toLong(), remaining).toInt()
+                val read = raf.read(buffer, 0, wanted)
+                if (read <= 0) break
+                output.write(buffer, 0, read)
+                remaining -= read
             }
         }
         output.flush()
+        return keepAlive
     }
 
     private fun writeHead(
@@ -239,7 +306,8 @@ object RecordingHttpServer {
         reason: String,
         mime: String,
         contentLength: Long,
-        extra: String = ""
+        extra: String = "",
+        keepAlive: Boolean = false
     ) {
         val head = buildString {
             append("HTTP/1.1 $status $reason\r\n")
@@ -250,7 +318,7 @@ object RecordingHttpServer {
             append("Cache-Control: no-store\r\n")
             append("Access-Control-Allow-Origin: $SHELL_ORIGIN\r\n")
             append("Vary: Origin\r\n")
-            append("Connection: close\r\n")
+            append("Connection: ${if (keepAlive) "keep-alive" else "close"}\r\n")
             append("\r\n")
         }
         output.write(head.toByteArray(Charsets.US_ASCII))
@@ -274,17 +342,24 @@ object RecordingHttpServer {
         }
     }
 
-    /** Consumes headers, returning the (lower-cased) Range value when present. */
-    private fun readHeaders(input: InputStream): String? {
+    /** Request headers the connection loop needs. */
+    private class RequestHeaders(val range: String?, val connection: String?)
+
+    /** Consumes headers, returning the Range and Connection values when present. */
+    private fun readHeaders(input: InputStream): RequestHeaders {
         var range: String? = null
+        var connection: String? = null
         while (true) {
-            val line = readLine(input) ?: return range
-            if (line.isEmpty()) return range
+            val line = readLine(input) ?: return RequestHeaders(range, connection)
+            if (line.isEmpty()) return RequestHeaders(range, connection)
             val separator = line.indexOf(':')
             if (separator <= 0) continue
             val name = line.substring(0, separator).trim().lowercase()
             val value = line.substring(separator + 1).trim()
-            if (name == "range") range = value
+            when (name) {
+                "range" -> range = value
+                "connection" -> connection = value
+            }
         }
     }
 }

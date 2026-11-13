@@ -176,6 +176,7 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
         start: typeof w.start === 'number' ? w.start : g.start,
         end: typeof w.end === 'number' ? w.end : g.end,
         confidence: w.confidence ?? 0.95,
+        ...(typeof w.is_exact === 'boolean' ? { is_exact: w.is_exact } : {}),
         style_override: w.style_override,
       };
     });
@@ -205,12 +206,13 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
         highlight_color: rawGroupStyle.highlight_color || default_style.highlight_color,
         highlight_enabled: rawGroupStyle.highlight_enabled !== false,
         outline_color: rawGroupStyle.outline_color || rawGroupStyle.stroke_color || default_style.outline_color,
-        outline_width: rawGroupStyle.outline_width || rawGroupStyle.stroke_width || default_style.outline_width,
+        outline_width: rawGroupStyle.outline_width ?? rawGroupStyle.stroke_width ?? default_style.outline_width,
       },
       animation: { ...default_animation, ...(g.animation || {}) },
       type: (g.type as LayerType) || 'caption',
       trackIndex: typeof g.trackIndex === 'number' && g.trackIndex >= 0 ? g.trackIndex : undefined,
-      volume: typeof g.volume === 'number' ? (g.volume <= 2.0 ? Math.round(g.volume * 100) : g.volume) : 100,
+      // Modern slider stores volume as a percent (0..200); never rescale it.
+      volume: typeof g.volume === 'number' ? g.volume : 100,
       is_muted: Boolean(g.is_muted),
       is_hidden: Boolean(g.is_hidden),
       audio_url: g.audio_url,
@@ -236,6 +238,12 @@ export function normalizeCaptionTrack(raw: unknown, clipId: string, duration: nu
     groups,
     range_revision: typeof source.range_revision === 'number' ? source.range_revision : undefined,
     timing_warning: typeof source.timing_warning === 'string' ? source.timing_warning : null,
+    transcribe_source_mode:
+      source.transcribe_source_mode === 'full_mix' ||
+      source.transcribe_source_mode === 'voiceover_only' ||
+      source.transcribe_source_mode === 'main_video'
+        ? source.transcribe_source_mode
+        : undefined,
   };
 }
 

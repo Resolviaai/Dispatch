@@ -675,6 +675,10 @@ def init_db():
                 cursor.execute("ALTER TABLE clips ADD COLUMN extraction_source TEXT;")
             if "extraction_model" not in clip_cols:
                 cursor.execute("ALTER TABLE clips ADD COLUMN extraction_model TEXT;")
+            # Cloud rescan watermark: stored after a fully successful cloud sync
+            # sweep; cleared by clip mutators so the next sweep re-syncs.
+            if "cloud_sync_hash" not in clip_cols:
+                cursor.execute("ALTER TABLE clips ADD COLUMN cloud_sync_hash TEXT;")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_id ON clips (user_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_user_status ON clips (user_id, status);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clips_session_status ON clips (session_id, status);")
@@ -1064,15 +1068,16 @@ def update_clip_trim(
             or abs(clamped_end - float(row["end_time"])) > 0.001
         )
         cursor.execute("""
-            UPDATE clips 
+            UPDATE clips
             SET start_time = ?, end_time = ?, duration = ?,
                 range_revision = COALESCE(range_revision, 0) + ?,
                 render_stale = CASE WHEN ? = 1 AND video_path IS NOT NULL THEN 1 ELSE render_stale END,
-                caption_timing_warning = CASE WHEN ? = 1 THEN NULL ELSE caption_timing_warning END
+                caption_timing_warning = CASE WHEN ? = 1 THEN NULL ELSE caption_timing_warning END,
+                cloud_sync_hash = CASE WHEN ? = 1 THEN NULL ELSE cloud_sync_hash END
             WHERE id = ? AND COALESCE(range_revision, 0) = ?
         """, (
             clamped_start, clamped_end, new_duration, int(changed), int(changed), int(changed),
-            clip_id, int(row["range_revision"] or 0),
+            int(changed), clip_id, int(row["range_revision"] or 0),
         ))
         conn.commit()
         return cursor.rowcount == 1
@@ -1269,7 +1274,8 @@ def save_clip_caption_data(
             UPDATE clips
             SET caption_data = ?, caption_range_revision = ?, caption_range_start = ?, caption_range_end = ?,
                 caption_timing_warning = ?, captions_revision = COALESCE(captions_revision, 0) + 1,
-                caption_coordinate_system = COALESCE(caption_coordinate_system, 'clip_relative')
+                caption_coordinate_system = COALESCE(caption_coordinate_system, 'clip_relative'),
+                cloud_sync_hash = NULL
             WHERE id = ? AND COALESCE(range_revision, 0) = ?
         """
         params: list[Any] = [
@@ -1280,6 +1286,22 @@ def save_clip_caption_data(
             sql += " AND COALESCE(captions_revision, 0) = ?"
             params.append(int(expected_captions_revision))
         cursor.execute(sql, tuple(params))
+        return cursor.rowcount == 1
+
+
+def set_clip_cloud_sync_hash(clip_id: str, sync_hash: Optional[str]) -> bool:
+    """Store (or clear with None) the cloud rescan watermark for one clip.
+
+    The hash is written only after a fully successful cloud sync; the next
+    sweep skips the clip while its recomputed hash matches, and re-syncs the
+    moment any synced field changes (or the hash was cleared by a mutator).
+    """
+    with write_transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE clips SET cloud_sync_hash = ? WHERE id = ?",
+            (sync_hash, clip_id),
+        )
         return cursor.rowcount == 1
 
 

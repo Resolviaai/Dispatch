@@ -64,13 +64,6 @@ export function normalizeFilmstripPayload(
   const duration = toFinite(data.duration);
   if (duration === null || duration <= 0) return null;
 
-  // Stale duration check: if expected duration is provided, reject if mismatched by > 1.0s
-  if (validation?.expectedDuration !== undefined) {
-    if (Math.abs(duration - validation.expectedDuration) > 1.0) {
-      return null;
-    }
-  }
-
   // 2. Clip ID ownership validation
   const clipId = typeof data.clip_id === 'string'
     ? data.clip_id
@@ -87,9 +80,25 @@ export function normalizeFilmstripPayload(
   const scope: FilmstripScope = rawScope === 'render' ? 'render' : (rawScope === 'source' ? 'source' : 'none');
   const sourceStart = Math.max(0, toFinite(data.sourceStart ?? data.source_start) ?? 0);
 
-  // Stale source window check: if in source scope, sourceStart must match expectedClipStart within 1.0s
+  // Stale payload check: validate COVERAGE instead of exact equality. A strip
+  // generated for a wider edit window (before a trim narrowed the request, or a
+  // wider window load) still maps correctly onto the requested [clipStart, clipEnd]
+  // span; only payloads that fail to cover the requested span are stale.
+  if (validation?.expectedDuration !== undefined) {
+    const tolerance = 1.0;
+    const requestedStart = scope === 'source' ? (validation.expectedClipStart ?? sourceStart) : 0;
+    const requestedEnd = requestedStart + validation.expectedDuration;
+    const stripStart = scope === 'source' ? sourceStart : 0;
+    const stripEnd = stripStart + duration;
+    if (stripStart > requestedStart + tolerance || stripEnd < requestedEnd - tolerance) {
+      return null;
+    }
+  }
+
+  // For source-scope strips the strip origin must not start AFTER the requested
+  // clip start (it may legitimately start earlier to provide context).
   if (scope === 'source' && validation?.expectedClipStart !== undefined) {
-    if (Math.abs(sourceStart - validation.expectedClipStart) > 1.0) {
+    if (sourceStart > validation.expectedClipStart + 1.0) {
       return null;
     }
   }
@@ -189,8 +198,13 @@ export function filmstripFrameBox(
   const slotStart = t;
   const slotEnd = t + slotDuration;
 
-  // Map to ruler coordinate system, taking into account filmstrip source offset
-  const effectiveClipStart = options.clipStart ?? filmstrip.sourceStart ?? 0;
+  // Map to ruler coordinate system, taking into account filmstrip source offset.
+  // For scope 'source', the strip's own origin (filmstrip.sourceStart) is
+  // authoritative: options.clipStart describes the clip hull, which can differ
+  // from the strip origin after trims or wider edit-window loads.
+  const effectiveClipStart = filmstrip.scope === 'source'
+    ? filmstrip.sourceStart
+    : (options.clipStart ?? filmstrip.sourceStart ?? 0);
   const rulerStart = options.isSourceMode
     ? clipTimeToSourceTime(slotStart, effectiveClipStart)
     : slotStart;

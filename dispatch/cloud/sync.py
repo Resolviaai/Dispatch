@@ -1019,6 +1019,54 @@ def sync_clip_to_cloud(clip_id: str, clip: Optional[Dict[str, Any]] = None, stat
         return False
 
 
+def compute_clip_sync_hash(clip: Dict[str, Any]) -> Optional[str]:
+    """Conservative watermark over everything sync_clip_to_cloud publishes.
+
+    Covers the clip fields the cloud upsert depends on (bounds, revisions,
+    status, title, framing, fingerprints) plus a content hash of the caption
+    track itself. Returns None when the row cannot be hashed — callers must
+    sync when in doubt. The stored hash is written only after a fully
+    successful push, so a matching stored hash also implies the cloud row
+    existed at sweep time.
+    """
+    try:
+        caption_obj = _parse_json_safe(clip.get("caption_data"))
+        if isinstance(caption_obj, dict):
+            caption_content = json.dumps(
+                caption_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+            )
+        elif isinstance(clip.get("caption_data"), str):
+            caption_content = str(clip["caption_data"])
+        else:
+            caption_content = ""
+
+        payload = {
+            "v": 1,
+            "media_fingerprint": str(clip.get("media_fingerprint") or ""),
+            "start_time": round_ms(float(clip.get("start_time") or 0.0)),
+            "end_time": round_ms(float(clip.get("end_time") or 0.0)),
+            "ai_suggested_start_time": round_ms(float(clip.get("ai_suggested_start_time") or 0.0)),
+            "ai_suggested_end_time": round_ms(float(clip.get("ai_suggested_end_time") or 0.0)),
+            "range_revision": int(clip.get("range_revision") or 0),
+            "captions_revision": int(clip.get("captions_revision") or 0),
+            "cloud_caption_revision": int(clip.get("cloud_caption_revision") or 0),
+            "segments_revision": int(clip.get("segments_revision") or 0),
+            "status": str(clip.get("status") or ""),
+            "title": str(clip.get("title") or ""),
+            "layout_mode": str(clip.get("layout_mode") or ""),
+            "crop_anchor_x": clip.get("crop_anchor_x"),
+            "render_fingerprint": _render_fingerprint(clip),
+            "caption_content": hashlib.sha256(caption_content.encode("utf-8")).hexdigest(),
+            "session_id": str(clip.get("session_id") or ""),
+            "youtube_video_id": str(clip.get("youtube_video_id") or ""),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    except Exception as e:
+        logger.debug("Could not compute cloud sync hash for clip %s: %s", clip.get("id"), e)
+        return None
+
+
 def sync_all_clips_to_cloud():
     """Scan local SQLite and reconcile every clip this PC owns to the cloud.
 
@@ -1026,6 +1074,11 @@ def sync_all_clips_to_cloud():
     dashboard or from the phone while the PC was reachable) must not stay
     ``ready_review`` in ``clips_cloud``, or the phone resurrects it the first
     time it falls back to Cloud Mode.
+
+    Rescan watermark: a clip whose ``cloud_sync_hash`` still equals its
+    recomputed sync hash was pushed unchanged and is skipped. Everything else
+    (never synced, mutator-cleared hash, hash mismatch, hash computation
+    failure) syncs — always sync when in doubt.
     """
     try:
         with db.get_db_connection() as conn:
@@ -1035,14 +1088,30 @@ def sync_all_clips_to_cloud():
             ).fetchall()
 
         logger.info("Starting background cloud sync for %d local clips...", len(rows))
+        pushed = 0
         for r in rows:
             clip_dict = dict(r)
+            current_hash = compute_clip_sync_hash(clip_dict)
+            stored_hash = str(clip_dict.get("cloud_sync_hash") or "").strip()
+            if current_hash and stored_hash and stored_hash == current_hash:
+                continue
             # Only rejected rows skip staging; ready/approved/published still
             # need their proxy uploaded so the phone can play them.
-            sync_clip_to_cloud(
+            ok = sync_clip_to_cloud(
                 clip_dict["id"], clip_dict,
                 status_only=clip_dict.get("status") == "rejected",
             )
+            if ok and current_hash:
+                try:
+                    db.set_clip_cloud_sync_hash(str(clip_dict["id"]), current_hash)
+                except Exception as e:
+                    logger.debug("Could not store cloud sync hash for clip %s: %s", clip_dict["id"], e)
+            if ok:
+                pushed += 1
+        logger.info(
+            "Background cloud sync sweep finished: %d of %d clips needed a push.",
+            pushed, len(rows),
+        )
     except Exception as e:
         logger.error("Error in sync_all_clips_to_cloud: %s", e)
 

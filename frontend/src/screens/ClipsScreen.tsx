@@ -2916,10 +2916,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     return currentTime + start;
   }, [currentTime, isPlaying, isSourceTimebase, currentClip?.start_time, currentClip?.end_time, duration]);
 
-  // Always remap captions, including a single remaining EDL range. The persisted
-  // source origin must not follow mutable currentClip.start_time after edits.
-  const presentationCaptionTrack = useMemo(() => {
-    if (!visibleCaptionTrack || !currentClip) return visibleCaptionTrack;
+  // Immutable source-time origin the caption track is anchored to. start_time is
+  // a mutable presentation boundary and must never become the caption anchor.
+  const captionSourceOrigin = useMemo(() => {
+    if (!currentClip) return 0;
     const existingDoc = (currentClip as any).project_document;
     let timelineDoc: any = null;
     try {
@@ -2927,16 +2927,74 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } catch {
       timelineDoc = null;
     }
-    const clipStart = Number(
+    return Number(
       timelineDoc?.timeline?.caption_source_origin ??
       (currentClip as any).caption_source_origin ??
       (currentClip as any).original_start_time ??
       currentClip.start_time ??
       0
     );
+  }, [currentClip]);
+
+  // Always remap captions, including a single remaining EDL range. The persisted
+  // source origin must not follow mutable currentClip.start_time after edits.
+  const presentationCaptionTrack = useMemo(() => {
+    if (!visibleCaptionTrack || !currentClip) return visibleCaptionTrack;
     const sourceDur = Number(currentClip.source_duration || currentClip.end_time || 60);
-    return remapCaptionTrackToTimeline(visibleCaptionTrack, effectiveRanges, clipStart, sourceDur);
-  }, [visibleCaptionTrack, effectiveRanges, currentClip]);
+    return remapCaptionTrackToTimeline(visibleCaptionTrack, effectiveRanges, captionSourceOrigin, sourceDur);
+  }, [visibleCaptionTrack, effectiveRanges, currentClip, captionSourceOrigin]);
+
+  // CaptionStudio edits the UNREMAPPED track whose times are relative to the
+  // caption source origin, so it must receive the playhead in that same space.
+  // Map concat currentTime back through the EDL (gap-safe: concat time only
+  // exists over kept footage; clamp transient values into the kept span).
+  const studioCurrentTime = useMemo(() => {
+    if (!currentClip) return currentTime;
+    const kept = Math.max(0, duration || currentClip.duration || 0);
+    const clamped = Math.min(Math.max(0, currentTime || 0), kept);
+    let sourceTime: number;
+    try {
+      sourceTime = concatToSource(effectiveRanges, clamped, totalSourceDur);
+    } catch {
+      const segStart = effectiveRanges[0]?.[0] ?? captionSourceOrigin;
+      sourceTime = segStart + clamped;
+    }
+    return Math.max(0, Math.round((sourceTime - captionSourceOrigin) * 1000) / 1000);
+  }, [currentClip, duration, currentTime, effectiveRanges, totalSourceDur, captionSourceOrigin]);
+
+  // CaptionStudio seeks/animates in track space (origin-relative source time);
+  // convert back to presentation/concat time before driving the playhead.
+  const studioTrackTimeToConcat = (trackTime: number): number => {
+    const safeTrackTime = Number.isFinite(trackTime) ? trackTime : 0;
+    const sourceTime = captionSourceOrigin + safeTrackTime;
+    try {
+      const concat = sourceToConcat(effectiveRanges, sourceTime, totalSourceDur);
+      if (concat !== null) return concat;
+      // Gap-safe: the track time sits in trimmed-off footage — clamp onto the
+      // nearest kept segment edge instead of seeking into a removed gap.
+      let offset = 0;
+      let nearest = Math.max(0, safeTrackTime);
+      let nearestDist = Number.POSITIVE_INFINITY;
+      for (const [segStart, segEnd] of effectiveRanges) {
+        const span = Math.max(0, segEnd - segStart);
+        for (const [edgeSource, edgeConcat] of [[segStart, offset], [segEnd, offset + span]] as [number, number][]) {
+          const dist = Math.abs(sourceTime - edgeSource);
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearest = edgeConcat;
+          }
+        }
+        offset += span;
+      }
+      return nearest;
+    } catch {
+      return Math.max(0, safeTrackTime);
+    }
+  };
+
+  const handleStudioSeek = (trackTime: number) => {
+    handleSeek(studioTrackTimeToConcat(trackTime));
+  };
 
   // 3. Playback Controls & Dual-Layer Video Sync with Adaptive Timebase Mapping
   const handleTogglePlay = () => {
@@ -3719,6 +3777,21 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     }
   };
 
+  // Resolve a timeline-emitted group id back to its source captionTrack group.
+  // remapCaptionTrackToTimeline fragments a group that spans removed footage into
+  // `${id}_${fragmentIndex}` blocks carrying `sourceGroupId`; edits addressed to a
+  // fragment must mutate the original source group, not a nonexistent track entry.
+  const resolveSourceGroupId = (groupId: string): string => {
+    if (captionTrack?.groups?.some((g) => g.id === groupId)) return groupId;
+    const fragment = presentationCaptionTrack?.groups?.find((g) => g.id === groupId) as any;
+    if (fragment && typeof fragment.sourceGroupId === 'string' && fragment.sourceGroupId) {
+      return fragment.sourceGroupId;
+    }
+    // Fallback for presentation tracks emitted before sourceGroupId existed.
+    const match = /^(.*)_(\d+)$/.exec(groupId);
+    return match ? match[1] : groupId;
+  };
+
   // 4. Update Caption Group with Transient Preview vs Commit Support
   const handleUpdateGroup = (
     groupId: string,
@@ -3726,7 +3799,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     commitToHistory: boolean = true
   ) => {
     if (!captionTrack) return;
-    const sourceGrp = captionTrack.groups.find(g => g.id === groupId);
+    const sourceGroupId = resolveSourceGroupId(groupId);
+    const sourceGrp = captionTrack.groups.find(g => g.id === sourceGroupId);
     if (!sourceGrp) return;
 
     let finalPatch = { ...patch };
@@ -3740,11 +3814,17 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         finalPatch.start = Math.max(0, Math.round((sourceGrp.start + deltaStart) * 1000) / 1000);
         finalPatch.end = Math.max(finalPatch.start + 0.05, Math.round((sourceGrp.end + deltaEnd) * 1000) / 1000);
 
+        // Patch words arrive in PRESENTATION coordinates with the drag already
+        // applied (CaptionTimeline shifts them itself before emitting). Convert
+        // them into source coordinates with exactly ONE mapping — the constant
+        // presentation->source offset of this group. Re-applying deltaStart
+        // double-shifted every dragged word.
+        const presToSourceShift = sourceGrp.start - presGrp.start;
         if (Array.isArray(finalPatch.words)) {
           finalPatch.words = finalPatch.words.map(w => ({
             ...w,
-            start: Math.max(0, Math.round((w.start + deltaStart) * 1000) / 1000),
-            end: Math.max(0, Math.round((w.end + deltaStart) * 1000) / 1000),
+            start: Math.max(0, Math.round((w.start + presToSourceShift) * 1000) / 1000),
+            end: Math.max(0, Math.round((w.end + presToSourceShift) * 1000) / 1000),
           }));
         } else if (Array.isArray(sourceGrp.words) && deltaStart !== 0) {
           finalPatch.words = sourceGrp.words.map(w => ({
@@ -3759,7 +3839,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     const updatedTrack = {
       ...captionTrack,
       groups: captionTrack.groups.map((grp) => {
-        if (grp.id !== groupId) return grp;
+        if (grp.id !== sourceGroupId) return grp;
         const next: CaptionGroup = { ...grp, ...finalPatch };
         if (finalPatch.layout) next.layout = { ...(grp.layout || captionTrack.default_layout), ...finalPatch.layout };
         if (finalPatch.style) next.style = { ...(grp.style || captionTrack.default_style), ...finalPatch.style };
@@ -3790,7 +3870,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
   // Split Caption Group at Split Time
   const handleSplitGroup = (groupId: string, splitTime: number) => {
     if (!captionTrack) return;
-    const sourceGrp = captionTrack.groups?.find((g) => g.id === groupId);
+    const sourceGroupId = resolveSourceGroupId(groupId);
+    const sourceGrp = captionTrack.groups?.find((g) => g.id === sourceGroupId);
     if (!sourceGrp) return;
 
     let sourceSplitTime = splitTime;
@@ -3807,7 +3888,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     const [first, second] = splitResult;
     const updatedTrack = {
       ...captionTrack,
-      groups: captionTrack.groups.flatMap((g) => (g.id === groupId ? [first, second] : [g])),
+      groups: captionTrack.groups.flatMap((g) => (g.id === sourceGroupId ? [first, second] : [g])),
     };
     setCaptionTrack(updatedTrack, true);
     setSelectedGroupId(second.id);
@@ -4176,10 +4257,15 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
   const generateLocalAutoCutProposals = (): AutoCutProposal[] => {
     if (!captionTrack || !captionTrack.groups || captionTrack.groups.length === 0) return [];
+    // Caption track words are relative to the caption source origin, while
+    // auto-cut proposals are consumed in absolute source coordinates by
+    // handleApplyAutoCut. Shift once here so every proposal is source-anchored.
+    const captionOrigin = captionSourceOrigin;
     const proposals: AutoCutProposal[] = [];
     const allWords = captionTrack.groups
       .flatMap((g) => g.words || [])
       .filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+      .map((w) => ({ ...w, start: captionOrigin + w.start, end: captionOrigin + w.end }))
       .sort((a, b) => a.start - b.start);
 
     // 1. Contextual filler words & obvious hesitation sounds (English + Hindi/Hinglish)
@@ -4465,8 +4551,17 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
         if (geminiKey && allWords.length > 0) {
           setFeedback('AI analyzing Hindi/Hinglish speech directly on device...');
+          // Caption words are relative to the caption source origin while the
+          // Gemini range filter (clipStartSec/clipEndSec) is absolute source
+          // time. Convert words into source coordinates before calling, or the
+          // range filter drops every word once the clip starts past 0s.
+          const sourceWords = allWords.map((w) => ({
+            ...w,
+            start: captionSourceOrigin + w.start,
+            end: captionSourceOrigin + w.end,
+          }));
           geminiProposals = await analyzeSpeechWithGeminiFlashLite(
-            allWords,
+            sourceWords,
             geminiKey,
             clipStartSec,
             clipEndSec
@@ -4806,9 +4901,10 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
   const handleDeleteGroup = (groupId: string) => {
     if (!captionTrack) return;
+    const sourceGroupId = resolveSourceGroupId(groupId);
     setCaptionTrack({
       ...captionTrack,
-      groups: captionTrack.groups.filter((grp) => grp.id !== groupId),
+      groups: captionTrack.groups.filter((grp) => grp.id !== sourceGroupId),
     });
     setSelectedGroupId(null);
     setSaveStatus('unsaved');
@@ -6860,7 +6956,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               <div className="h-12 shrink-0 bg-[#121418] border-t border-[#232832] z-30 pb-[env(safe-area-inset-bottom,0px)]">
                 <CaptionStudio
                   track={visibleCaptionTrack}
-                  currentTime={currentTime}
+                  currentTime={studioCurrentTime}
                   duration={duration || currentClip.duration || 40}
                   selectedGroupId={selectedGroupId}
                   isVideoSelected={isVideoSelected}
@@ -6903,8 +6999,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   splitClipTime={currentTime}
                   onFeedback={setFeedback}
                   onLayoutChange={handleLayoutChange}
-                  onSeek={handleSeek}
-                  onPreviewAnimation={handlePreviewAnimation}
+                  onSeek={handleStudioSeek}
+                  onPreviewAnimation={(s, e) => handlePreviewAnimation(studioTrackTimeToConcat(s), studioTrackTimeToConcat(e))}
                   canUndo={Boolean((currentClip as any)?.can_undo) || canUndo}
                   canRedo={Boolean((currentClip as any)?.can_redo) || canRedo}
                   onUndo={handleTimelineUndo}
@@ -6918,7 +7014,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             <div className="flex-1 min-h-0 w-full h-full bg-[#121418] z-30 pb-[env(safe-area-inset-bottom,0px)] overflow-hidden">
               <CaptionStudio
                 track={visibleCaptionTrack}
-                currentTime={currentTime}
+                currentTime={studioCurrentTime}
                 duration={duration || currentClip.duration || 40}
                 selectedGroupId={selectedGroupId}
                 isVideoSelected={isVideoSelected}
@@ -6961,8 +7057,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 splitClipTime={currentTime}
                 onFeedback={setFeedback}
                 onLayoutChange={handleLayoutChange}
-                onSeek={handleSeek}
-                onPreviewAnimation={handlePreviewAnimation}
+                onSeek={handleStudioSeek}
+                onPreviewAnimation={(s, e) => handlePreviewAnimation(studioTrackTimeToConcat(s), studioTrackTimeToConcat(e))}
                 canUndo={canUndo}
                 canRedo={canRedo}
                 onUndo={undo}

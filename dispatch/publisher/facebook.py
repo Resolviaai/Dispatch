@@ -41,8 +41,19 @@ def _raise_for_fb_auth_or_status(resp: requests.Response, context: str) -> None:
     resp.raise_for_status()
 
 
-def _resolve_page_token(token: str, page_id: Optional[str]) -> Tuple[str, str]:
-    """Resolve an explicit Page ID + Page Access Token when a User token or blank page_id is passed."""
+def _resolve_page_token(
+    token: str,
+    page_id: Optional[str],
+    preferred_page_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Resolve an explicit Page ID + Page Access Token when a User token or blank page_id is passed.
+
+    `preferred_page_id` carries a stored credential page_id (see
+    dispatch.youtube_connections.get_account_credentials, which copies the brokered
+    `page_id` field into the credential payload): when /me/accounts lists several
+    Pages, the Page matching it is selected instead of raising. The explicit
+    ambiguity error is kept only when no preferred id is given (or none matches).
+    """
     headers = {"Authorization": f"Bearer {token}"}
     if page_id:
         res = requests.get(
@@ -71,6 +82,17 @@ def _resolve_page_token(token: str, page_id: Optional[str]) -> Tuple[str, str]:
     if not isinstance(pages, list) or not pages:
         raise PermissionError("No Facebook Page found for this account.")
     if len(pages) > 1:
+        preferred = str(preferred_page_id or "").strip()
+        if preferred:
+            match = next(
+                (pg for pg in pages if str(pg.get("id") or "").strip() == preferred),
+                None,
+            )
+            if match is not None:
+                resolved_id = str(match.get("id") or "").strip()
+                resolved_tok = str(match.get("access_token") or token).strip()
+                if resolved_id and resolved_tok:
+                    return resolved_tok, resolved_id
         raise PermissionError("Multiple Facebook Pages found; explicit page_id is required.")
     page = pages[0]
     resolved_id = str(page.get("id") or "").strip()
@@ -128,27 +150,35 @@ def upload_facebook_reel(
     access_token: Optional[str] = None,
     page_id: Optional[str] = None,
     poll_interval_seconds: float = 5.0,
+    credentials: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Upload vertical video to Facebook Reels via Meta Graph API.
-    
+
     Args:
         video_path: Local path to .mp4 video file.
         description: Reel description and hashtags.
         access_token: Page Access Token with pages_manage_posts and pages_read_engagement.
         page_id: Facebook Page ID.
         poll_interval_seconds: Seconds between status polls.
-        
+        credentials: Optional full credential payload (as returned by
+            dispatch.youtube_connections.get_account_credentials). Its stored
+            page_id is used to disambiguate multi-Page accounts when no explicit
+            page_id is available.
+
     Returns:
         Dict with status, remote_id, and url.
     """
     token = access_token or os.getenv("FACEBOOK_ACCESS_TOKEN")
     target_page_id = page_id or os.getenv("FACEBOOK_PAGE_ID")
+    # Stored credential page_id (optional brokered field) disambiguates the
+    # /me/accounts listing when no explicit Page id was provided.
+    preferred_page_id = str((credentials or {}).get("page_id") or "").strip() or None
 
     if not token:
         raise PermissionError("Facebook Graph API credentials missing (FACEBOOK_ACCESS_TOKEN).")
 
     if not target_page_id:
-        token, target_page_id = _resolve_page_token(token, None)
+        token, target_page_id = _resolve_page_token(token, None, preferred_page_id=preferred_page_id)
 
     if not video_path.exists():
         raise FileNotFoundError(f"Video file missing: {video_path}")
@@ -237,6 +267,7 @@ def upload_facebook_reel(
 
         # Step 4: Verify Video Status
         status_url = f"{GRAPH_BASE_URL}/{video_id}"
+        is_ready = False
         for idx in range(12):  # Poll up to 60 seconds (12 * 5s)
             status_res = requests.get(
                 status_url,
@@ -252,11 +283,18 @@ def upload_facebook_reel(
                 st = str(st_obj.get("video_status") or "").lower()
                 proc_st = str((st_obj.get("processing_phase") or {}).get("status") or "").lower()
                 if st in ("ready", "complete") or proc_st == "complete":
+                    is_ready = True
                     break
                 if st == "error" or proc_st == "error":
                     raise RuntimeError(f"Facebook Reel processing failed: {sdata}")
             if idx < 11 and poll_interval_seconds > 0:
                 time.sleep(poll_interval_seconds)
+
+        # Only report 'published' once Meta confirmed the video is ready; falling
+        # through while Meta is still processing would mark the outbox row published
+        # before the Reel actually exists publicly.
+        if not is_ready:
+            raise TimeoutError(f"Facebook Reel {video_id} timed out processing")
 
         remote_url = f"https://www.facebook.com/reel/{video_id}"
         logger.info("Facebook Reel %s published: %s", video_id, remote_url)

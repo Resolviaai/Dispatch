@@ -9,7 +9,10 @@ from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("dispatch.publisher.linkedin")
 
-LINKEDIN_API_VERSION = "202501"
+# LinkedIn versioned API header (YYYYMM). The pinned 202501 version was sunset by
+# LinkedIn on 2026-01-15 (every request since fails with HTTP 400), so the default
+# tracks a current version and operators can pin another via DISPATCH_LINKEDIN_API_VERSION.
+LINKEDIN_API_VERSION = os.getenv("DISPATCH_LINKEDIN_API_VERSION", "202610")
 
 
 def _parse_json_safe(resp: requests.Response) -> Dict[str, Any]:
@@ -179,22 +182,35 @@ def upload_linkedin_video(
         fin_res = requests.post(fin_url, headers=headers, json=fin_body, timeout=(15, 30))
         _raise_for_linkedin_auth_or_status(fin_res, "finalizeUpload")
 
-        # Step 4: Poll video status until AVAILABLE
+        # Step 4: Poll video status until AVAILABLE. Transient failures (HTTP >= 500
+        # or 429) are retried within the same poll deadline; only a definitive 4xx
+        # aborts polling early. Post creation proceeds solely once the video is
+        # confirmed AVAILABLE (never while LinkedIn is still PROCESSING).
         encoded_urn = urllib.parse.quote(str(video_urn), safe="")
         status_url = f"https://api.linkedin.com/rest/videos/{encoded_urn}"
+        is_ready = False
         for idx in range(10):
             st_res = requests.get(status_url, headers=headers, timeout=(10, 15))
             if st_res.status_code in (401, 403):
                 _raise_for_linkedin_auth_or_status(st_res, "video status poll")
+            if st_res.status_code >= 500 or st_res.status_code == 429:
+                # Transient: retry within the existing poll deadline.
+                if idx < 9 and poll_interval_seconds > 0:
+                    time.sleep(poll_interval_seconds)
+                continue
             if st_res.status_code != 200:
-                break
+                break  # definitive 4xx: re-polling will not change the answer
             st_val = str(_parse_json_safe(st_res).get("status") or "").upper()
-            if not st_val or st_val == "AVAILABLE":
+            if st_val == "AVAILABLE":
+                is_ready = True
                 break
             if st_val == "PROCESSING_FAILED":
                 raise RuntimeError(f"LinkedIn video processing failed for {video_urn}")
             if idx < 9 and poll_interval_seconds > 0:
                 time.sleep(poll_interval_seconds)
+
+        if not is_ready:
+            raise TimeoutError(f"LinkedIn video {video_urn} timed out processing")
 
         # Step 5: Create post via Posts API
         logger.info("Creating LinkedIn post via Posts API...")

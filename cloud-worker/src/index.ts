@@ -52,6 +52,7 @@ export interface Env {
   LINKEDIN_CLIENT_SECRET?: string;
   TWITTER_CLIENT_ID?: string;
   TWITTER_CLIENT_SECRET?: string;
+  DISPATCH_LINKEDIN_API_VERSION?: string;
 }
 
 const PRESIGN_EXPIRES = 600; // seconds; short-lived by contract
@@ -1524,7 +1525,13 @@ export async function probeYouTubeDuration(videoId: string): Promise<number | nu
 
 const R2_MAX_CHUNK_BYTES = 8 * 1024 * 1024; // 8 MiB (32 * 256 KiB for YouTube resumable alignment)
 const X_APPEND_CHUNK_BYTES = 5 * 1024 * 1024; // 5 MiB (<= 8 MiB, X media APPEND cap)
-const LINKEDIN_API_VERSION = "202501";
+// LinkedIn versioned API header (YYYYMM). The pinned 202501 version was sunset by
+// LinkedIn on 2026-01-15 (every request fails with HTTP 400); default tracks a
+// current version and operators can pin another via DISPATCH_LINKEDIN_API_VERSION.
+function linkedinApiVersion(env: Env): string {
+  const pinned = (env.DISPATCH_LINKEDIN_API_VERSION ?? "").trim();
+  return pinned || "202610";
+}
 
 type PublishPlatform = "youtube" | "instagram" | "linkedin" | "twitter" | "facebook";
 
@@ -2553,7 +2560,7 @@ export async function drainPublishingQueue(
               const authorUrn = rawUrn.startsWith("urn:li:") ? rawUrn : `urn:li:person:${rawUrn}`;
               const liHeaders = {
                 Authorization: `Bearer ${accessToken}`,
-                "Linkedin-Version": LINKEDIN_API_VERSION,
+                "Linkedin-Version": linkedinApiVersion(env),
                 "X-Restli-Protocol-Version": "2.0.0",
                 "Content-Type": "application/json",
               };

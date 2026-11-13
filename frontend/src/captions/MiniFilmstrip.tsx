@@ -27,9 +27,16 @@ export function computeContextWindow(
   padding: number = 2.5
 ): { winStart: number; winEnd: number; winSpan: number; cutDuration: number } {
   const cutDuration = Math.max(0.01, sourceEnd - sourceStart);
-  const winStart = Math.max(0, sourceStart - padding);
+  // Never start the window after the cut itself (defends against inverted
+  // caller input where sourceEnd < sourceStart); a no-op for sane input.
+  const winStart = Math.max(0, Math.min(sourceStart - padding, sourceEnd - 0.01));
   const boundary = totalDuration > 0 ? totalDuration : Math.max(sourceEnd + padding, 60);
-  const winEnd = Math.min(boundary, sourceEnd + padding);
+  const rawWinEnd = Math.min(boundary, sourceEnd + padding);
+  // The window must never invert (winEnd < winStart) and must always contain
+  // the cut itself: when the caller's boundary is smaller than the requested
+  // context (stale or clip-relative totalDuration), extend at least to the
+  // cut's end instead of collapsing onto a sliver that hides part of the cut.
+  const winEnd = Math.max(rawWinEnd, sourceEnd);
   const winSpan = Math.max(0.1, winEnd - winStart);
   return { winStart, winEnd, winSpan, cutDuration };
 }
@@ -121,11 +128,14 @@ export const MiniFilmstrip: React.FC<MiniFilmstripProps> = ({
 
     const interval = filmstrip.interval || 1.0;
     const isSourceScope = filmstrip.scope === 'source';
-    const effectiveOffset = isSourceScope ? (filmstrip.sourceStart ?? clipStartOffset) : 0;
+    // Frame coordinates: scope 'source' frames are strip-local (origin = the strip's
+    // own sourceStart, which may differ from the clip hull after trims); scope
+    // 'render'/'none' frames are clip-local (origin = the clip start offset).
+    const effectiveOffset = isSourceScope ? (filmstrip.sourceStart ?? clipStartOffset) : clipStartOffset;
 
     return filmstrip.frames
       .map((f) => {
-        const frameSourceTime = isSourceScope ? f.t : f.t + effectiveOffset;
+        const frameSourceTime = f.t + effectiveOffset;
         const frameSpan = f.span || interval;
         return {
           url: f.url,

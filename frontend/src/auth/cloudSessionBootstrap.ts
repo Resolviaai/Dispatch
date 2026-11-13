@@ -43,7 +43,9 @@ export async function pushCloudSessionToNative(reason: string): Promise<void> {
       // 2026-10-29 race (an initial null push wiping a valid pairing mid-
       // restore) killed working sessions; clearing happens ONLY through the
       // explicit SIGNED_OUT event below, which now sends {"cleared": true}.
-      pushedAt = Date.now();
+      // Do NOT arm the throttle here: pushedAt is updated only after a valid
+      // session/account payload has actually been pushed to the bridge, so the
+      // real SIGNED_IN push that follows is never blocked by a null-session probe.
       return;
     }
     const accounts = await listConnectedAccounts(session.access_token);
