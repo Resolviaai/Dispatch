@@ -1799,6 +1799,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Source-like media (raw source or window proxy) plays through the source-space
   // EDL logic; only the rendered output is clip-relative.
   const isSourceTimebase = mediaTimebase !== 'rendered';
+  // Progressive timeline (Phase 2): per-clip approval to load the full recording
+  // from the PC after the cloud buffer boundary is hit, plus the boundary banner
+  // state and the playhead to restore across the proxy→source timebase switch.
+  const [fullSourceApprovedIds, setFullSourceApprovedIds] = useState<Set<string>>(() => new Set());
+  const [cloudBoundaryPrompt, setCloudBoundaryPrompt] = useState<'start' | 'end' | null>(null);
+  const pendingFullSourceSeekRef = useRef<number | null>(null);
   const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
   const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
   const filmstripReqIdRef = useRef<number>(0);
@@ -1937,22 +1943,30 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   );
   currentClipRef.current = currentClip;
 
-  // Gate the PC-hosted source URL on daemon reachability so an offline PC falls
-  // straight through to the cloud copy instead of hanging 20-40s on a dead host.
-  // Clips with no cloud copy yet keep the PC URL as their only playable candidate.
+  // Cloud-first editor boot (Phase 2): the staged cloud proxy is the default
+  // editor media. The PC-hosted source loads only when no cloud copy exists or
+  // the user explicitly approved full-source expansion at the cloud boundary.
   const editorSourceVideoUrl = useMemo(() => {
     if (!currentClip) return undefined;
-    const raw = currentClip.source_video_url || '';
-    if (/^https?:\/\//i.test(raw)) return raw;
-    const hasCloudFallback = Boolean(
+    const hasCloudMedia = Boolean(
       currentClip.edit_window_url ||
       currentClip.remote_url ||
       (currentClip.video_url && currentClip.video_url.startsWith('http'))
     );
+    if (hasCloudMedia && !fullSourceApprovedIds.has(currentClip.id)) return undefined;
+    const raw = currentClip.source_video_url || '';
+    if (/^https?:\/\//i.test(raw)) return raw;
     const pcReachable = Boolean(pcHost && isPcOnline !== false);
-    if (!pcReachable && hasCloudFallback) return undefined;
+    if (!pcReachable && hasCloudMedia) return undefined;
+    // No cloud copy yet: the PC URL stays the only playable candidate.
     return apiUrl(raw || `/api/clips/${currentClip.id}/source`, pcHost);
-  }, [currentClip, pcHost, isPcOnline]);
+  }, [currentClip, pcHost, isPcOnline, fullSourceApprovedIds]);
+
+  // Reset the cloud-boundary banner and pending playhead restore on clip switch.
+  useEffect(() => {
+    setCloudBoundaryPrompt(null);
+    pendingFullSourceSeekRef.current = null;
+  }, [currentClip?.id]);
 
   // Reset publish platform & account selection cleanly whenever switching clips so
   // one clip's manual platform/account choice never leaks onto another clip.
@@ -2972,6 +2986,51 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     ? Number(currentClip?.edit_window_end)
     : proxyWindowStart + (videoRef.current?.duration || 0);
 
+  // Progressive timeline (Phase 2): cloud_window scope while the staged proxy is
+  // the media; full_source only once the raw source loads after approval. Trim
+  // handles clamp to the staged window and boundary hits raise the load prompt.
+  const editorRangeScope: 'cloud_window' | 'full_source' = mediaTimebase === 'source' ? 'full_source' : 'cloud_window';
+  const editorTrimBounds = useMemo(() => (
+    mediaTimebase === 'proxy' && proxyWindowEnd > proxyWindowStart
+      ? { start: proxyWindowStart, end: proxyWindowEnd }
+      : undefined
+  ), [mediaTimebase, proxyWindowStart, proxyWindowEnd]);
+  const remainingBeforeSource = proxyWindowStart > 0.05 ? proxyWindowStart : 0;
+  const remainingAfterSource = totalSourceDur > proxyWindowEnd + 0.05 ? totalSourceDur - proxyWindowEnd : 0;
+
+  const handleTrimBoundaryHit = (side: 'start' | 'end') => {
+    const clip = currentClipRef.current;
+    if (!clip || editorRangeScope === 'full_source') return;
+    if (side === 'start' && !((Number(clip.edit_window_start ?? 0) || 0) > 0.05)) return;
+    if (side === 'end') {
+      const wEnd = Number(clip.edit_window_end ?? 0) || 0;
+      if (!(wEnd > 0) || (totalSourceDur > 0 && totalSourceDur - wEnd <= 0.05)) return;
+    }
+    setCloudBoundaryPrompt(side);
+  };
+
+  const handleApproveFullSource = () => {
+    const clip = currentClipRef.current;
+    setCloudBoundaryPrompt(null);
+    if (!clip) return;
+    if (!(pcHost && isPcOnline !== false)) {
+      setPlaybackFeedback('PC is offline — edits within the cloud window remain active');
+      setTimeout(() => setPlaybackFeedback(null), 3500);
+      return;
+    }
+    const v = videoRef.current;
+    if (v && mediaTimebase === 'proxy' && Number.isFinite(v.currentTime)) {
+      // Preserve the visible playhead across the proxy→source timebase switch.
+      pendingFullSourceSeekRef.current = mediaToSourceTime(v.currentTime);
+    }
+    setFullSourceApprovedIds(prev => {
+      if (prev.has(clip.id)) return prev;
+      const next = new Set(prev);
+      next.add(clip.id);
+      return next;
+    });
+  };
+
   const sourceToMediaTime = (sourceSec: number, kindOverride?: MediaTimebase): number => {
     const kind = kindOverride ?? mediaTimebase;
     const mediaDur = videoRef.current?.duration || 0;
@@ -3619,14 +3678,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         }
       }
       if (kind === 'source') {
-        const targetSource = (video.duration >= clipStart && clipStart > 0) ? clipStart : 0;
+        const pendingSeek = pendingFullSourceSeekRef.current;
+        pendingFullSourceSeekRef.current = null;
+        const targetSource = pendingSeek != null && Number.isFinite(pendingSeek)
+          ? clamp(pendingSeek, 0, video.duration || pendingSeek)
+          : ((video.duration >= clipStart && clipStart > 0) ? clipStart : 0);
         video.currentTime = targetSource;
         if (bgVideoRef.current) bgVideoRef.current.currentTime = targetSource;
       } else if (kind === 'proxy') {
+        pendingFullSourceSeekRef.current = null;
         const targetMedia = sourceToMediaTime(clipStart > 0 ? clipStart : 0, 'proxy');
         video.currentTime = targetMedia;
         if (bgVideoRef.current) bgVideoRef.current.currentTime = targetMedia;
       } else {
+        pendingFullSourceSeekRef.current = null;
         video.currentTime = 0;
         if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
       }
@@ -6839,6 +6904,40 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             </div>
           )}
 
+          {/* Cloud buffer boundary prompt (Phase 2 progressive timeline) */}
+          {cloudBoundaryPrompt && currentClip && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-[440px] rounded-xl bg-surface-100 border border-border shadow-lg px-3.5 py-2.5 flex items-center gap-3 animate-in fade-in">
+              <Cloud size={16} className="text-text-secondary shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold text-text-main">Cloud buffer limit reached</div>
+                <div className="text-[10px] text-text-muted font-mono truncate">
+                  {remainingBeforeSource > 0 && remainingAfterSource > 0
+                    ? `${formatDuration(remainingBeforeSource)} before · ${formatDuration(remainingAfterSource)} after on the PC`
+                    : remainingBeforeSource > 0
+                      ? `${formatDuration(remainingBeforeSource)} more before the window`
+                      : remainingAfterSource > 0
+                        ? `${formatDuration(remainingAfterSource)} more after the window`
+                        : 'Load the full recording from the PC?'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleApproveFullSource}
+                className="min-h-[44px] px-3 rounded-lg bg-primary hover:bg-primary-hover text-xs font-semibold text-white active:scale-[0.98] transition-all shrink-0"
+              >
+                Load
+              </button>
+              <button
+                type="button"
+                onClick={() => setCloudBoundaryPrompt(null)}
+                aria-label="Dismiss"
+                className="min-h-[44px] w-11 rounded-lg bg-surface-200 border border-border flex items-center justify-center text-text-secondary hover:text-text-main active:scale-95 transition-all shrink-0"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
           {/* 3. CAPCUT TRANSPORT-CONTROL ROW (Fullscreen · Play/Pause · Undo/Redo) */}
           <div className="shrink-0 h-9 px-3 bg-[#13161B] border-y border-[#232832] flex items-center justify-between text-[11px] z-20">
             {/* Left: Fullscreen / Expand preview icon + Timecode */}
@@ -7052,6 +7151,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     clipEnd={currentClip.end_time}
                     paddedStart={currentClip.edit_window_start ?? currentClip.padded_start}
                     paddedEnd={currentClip.edit_window_end ?? currentClip.padded_end}
+                    trimBounds={editorTrimBounds}
+                    onTrimBoundaryHit={handleTrimBoundaryHit}
                     onTrimChange={handleTrimChange}
                     onPreviewContext={handlePreviewContext}
                     onSeek={handleSeek}

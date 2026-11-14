@@ -106,6 +106,13 @@ interface CaptionTimelineProps {
 
   sourceTimebase?: boolean;
 
+  /** Hard clamp for trim handles (source seconds) — the staged cloud window
+      while the editor is in cloud_window scope. */
+  trimBounds?: { start: number; end: number };
+
+  /** Fired when a trim drag attempts to cross a trimBounds edge. */
+  onTrimBoundaryHit?: (side: 'start' | 'end') => void;
+
   onTrimChange?: (sourceStart: number, sourceEnd: number) => Promise<boolean | void> | boolean | void;
 
   onPreviewContext?: (range: { start: number; end: number }) => void;
@@ -219,6 +226,10 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   sourceDuration,
 
   sourceTimebase = true,
+
+  trimBounds,
+
+  onTrimBoundaryHit,
 
   timeMode,
 
@@ -2117,6 +2128,13 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
         ? pieces[drag.pieceIndex + 1].start
         : ((sourceDuration && sourceDuration > 0) ? sourceDuration : Infinity);
       newEnd = clamp(rawEnd, minBound, maxBound);
+    }
+
+    // Cloud-window scope: clamp to the staged bounds and report boundary hits
+    // so the editor can offer full-source expansion.
+    if (trimBounds && Number.isFinite(trimBounds.start) && Number.isFinite(trimBounds.end) && trimBounds.end > trimBounds.start) {
+      if (newStart < trimBounds.start) { onTrimBoundaryHit?.('start'); newStart = trimBounds.start; }
+      if (newEnd > trimBounds.end) { onTrimBoundaryHit?.('end'); newEnd = trimBounds.end; }
     }
 
     newStart = Number(newStart.toFixed(2));
