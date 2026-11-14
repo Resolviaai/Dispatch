@@ -92,11 +92,22 @@ class RecordingHttpServerTest {
         root: File,
         block: (client: Socket, input: BufferedInputStream, out: java.io.OutputStream) -> Unit
     ) {
+        withConnection(root, null, block)
+    }
+
+    private fun withConnection(
+        root: File,
+        proxyRoot: File?,
+        block: (client: Socket, input: BufferedInputStream, out: java.io.OutputStream) -> Unit
+    ) {
         val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val handler = thread(start = true, isDaemon = true) {
             try {
                 val socket = server.accept()
-                RecordingHttpServer.handleConnection(socket, TOKEN, listOf(root, root))
+                RecordingHttpServer.handleConnection(
+                    socket, TOKEN, listOf(root, root),
+                    proxyRoot?.let { listOf(it) } ?: emptyList()
+                )
             } catch (_: Exception) {
                 // Accept/serve failure: the client-side assertions will fail with detail.
             }
@@ -238,6 +249,88 @@ class RecordingHttpServerTest {
             }
             // Cap reached: the server closes the connection instead of serving forever.
             assertEquals(-1, input.read())
+        }
+    }
+
+    // ------------------------------------------------------------- full proxies
+
+    @Test
+    fun fullProxiesPrefix_servesFilesFromProxyRoot_withRangeSupport() {
+        val root = newRoot()
+        val proxyRoot = newRoot()
+        val payload = ByteArray(2048) { ((it * 3) % 251).toByte() }
+        File(proxyRoot, "clip_full.mp4").writeBytes(payload)
+
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /$TOKEN/full_proxies/clip_full.mp4 HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            val full = readResponse(input)
+            assertEquals(200, full.status)
+            assertArrayEquals(payload, full.body)
+            assertEquals("keep-alive", full.header("Connection")?.lowercase())
+
+            out.write("GET /$TOKEN/full_proxies/clip_full.mp4 HTTP/1.1\r\nHost: localhost\r\nRange: bytes=50-59\r\n\r\n".toByteArray())
+            out.flush()
+            val range = readResponse(input)
+            assertEquals(206, range.status)
+            assertEquals("bytes 50-59/2048", range.header("Content-Range"))
+            assertArrayEquals(payload.copyOfRange(50, 60), range.body)
+        }
+    }
+
+    @Test
+    fun fullProxiesPrefix_missingFile_is404_andTmpIsRefused() {
+        val root = newRoot()
+        val proxyRoot = newRoot()
+        File(proxyRoot, "clip_done.mp4").writeBytes(byteArrayOf(1, 2, 3))
+
+        // Error replies close the connection: one request per connection.
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /$TOKEN/full_proxies/ghost.mp4 HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            assertEquals(404, readResponse(input).status)
+        }
+
+        // In-flight download: only ever present as {name}.tmp; must never be served.
+        File(proxyRoot, "clip_partial.mp4.tmp").writeBytes(byteArrayOf(9, 9, 9))
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /$TOKEN/full_proxies/clip_partial.mp4.tmp HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            assertEquals(404, readResponse(input).status)
+        }
+    }
+
+    @Test
+    fun fullProxiesPrefix_wrongToken_is403() {
+        val root = newRoot()
+        val proxyRoot = newRoot()
+        File(proxyRoot, "clip_full.mp4").writeBytes(byteArrayOf(1, 2, 3))
+
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /wrongtoken/full_proxies/clip_full.mp4 HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            assertEquals(403, readResponse(input).status)
+        }
+    }
+
+    @Test
+    fun fullProxiesPrefix_rejectsTraversalAndUnknownPrefixes() {
+        val root = newRoot()
+        val proxyRoot = newRoot()
+
+        // Path traversal inside the proxy root is refused, not resolved.
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /$TOKEN/full_proxies/../recordings/secret.mp4 HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            val traversal = readResponse(input)
+            assertTrue(traversal.status == 403 || traversal.status == 404)
+        }
+
+        // Unknown prefix under the token stays forbidden (no accidental media exposure).
+        withConnection(root, proxyRoot) { _, input, out ->
+            out.write("GET /$TOKEN/somewhere_else/x.mp4 HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+            out.flush()
+            assertEquals(403, readResponse(input).status)
         }
     }
 }

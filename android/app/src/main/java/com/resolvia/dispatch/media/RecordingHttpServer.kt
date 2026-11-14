@@ -20,7 +20,8 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Loopback HTTP/1.1 server for recorded segments and their posters.
+ * Loopback HTTP/1.1 server for recorded segments, their posters, and cached
+ * full-proxy transcodes (`cacheDir/full_proxies`, served under `/token/full_proxies/`).
  *
  * Why this exists: media was previously served through
  * `WebViewClient.shouldInterceptRequest`, which is not an HTTP connection. A media
@@ -62,6 +63,7 @@ object RecordingHttpServer {
     @Volatile private var token: String = ""
     @Volatile private var port: Int = 0
     @Volatile private var roots: List<File> = emptyList()
+    @Volatile private var proxyRoots: List<File> = emptyList()
 
     /** Starts the server if needed. Returns true when it is accepting connections. */
     @Synchronized
@@ -72,6 +74,9 @@ object RecordingHttpServer {
             roots = listOf(
                 File(app.getExternalFilesDir(null) ?: app.filesDir, "recordings").apply { if (!exists()) mkdirs() },
                 File(app.filesDir, "recordings").apply { if (!exists()) mkdirs() }
+            )
+            proxyRoots = listOf(
+                File(app.cacheDir, "full_proxies").apply { if (!exists()) mkdirs() }
             )
             val socket = ServerSocket(0, 8, InetAddress.getByName(HOST))
             serverSocket = socket
@@ -107,6 +112,15 @@ object RecordingHttpServer {
         return "http://$HOST:$activePort/$activeToken/recordings/$encoded"
     }
 
+    /** Absolute loopback URL for a cached full-proxy file, or null when not running. */
+    fun fullProxyUrl(fileName: String): String? {
+        val activePort = port
+        val activeToken = token
+        if (activePort <= 0 || activeToken.isEmpty() || fileName.isBlank()) return null
+        val encoded = URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
+        return "http://$HOST:$activePort/$activeToken/full_proxies/$encoded"
+    }
+
     @Synchronized
     fun stop() {
         try {
@@ -120,6 +134,8 @@ object RecordingHttpServer {
         pool = null
         port = 0
         token = ""
+        roots = emptyList()
+        proxyRoots = emptyList()
     }
 
     private fun randomToken(): String {
@@ -142,7 +158,7 @@ object RecordingHttpServer {
     }
 
     private fun handle(client: Socket) {
-        handleConnection(client, token, roots)
+        handleConnection(client, token, roots, proxyRoots)
     }
 
     /**
@@ -162,7 +178,7 @@ object RecordingHttpServer {
      *
      * Internal (not private) so JVM unit tests can drive the loop directly.
      */
-    internal fun handleConnection(client: Socket, activeToken: String, activeRoots: List<File>) {
+    internal fun handleConnection(client: Socket, activeToken: String, activeRoots: List<File>, proxyRoots: List<File> = emptyList()) {
         try {
             client.soTimeout = CONNECTION_TIMEOUT_MS
             client.use { socket ->
@@ -183,14 +199,25 @@ object RecordingHttpServer {
                             return writeText(output, 405, "Method Not Allowed")
                         }
                         val target = parts[1].substringBefore('?')
-                        val prefix = "/$activeToken/recordings/"
-                        if (!target.startsWith(prefix)) {
+                        val recordingsPrefix = "/$activeToken/recordings/"
+                        val fullProxyPrefix = "/$activeToken/full_proxies/"
+                        val isRecordings = target.startsWith(recordingsPrefix)
+                        val isFullProxy = target.startsWith(fullProxyPrefix)
+                        if (!isRecordings && !isFullProxy) {
                             // Wrong/absent token: do not reveal whether a file exists.
                             return writeText(output, 403, "Forbidden")
                         }
-                        val requestedName = target.removePrefix(prefix)
-                        val file = RecordingMediaPolicy.resolveRecordingPath(requestedName, activeRoots[0], activeRoots[1])
-                            ?: return writeText(output, 404, "Not Found")
+                        val file = if (isFullProxy) {
+                            val proxyRoot = proxyRoots.firstOrNull()
+                            if (proxyRoot == null) null
+                            else RecordingMediaPolicy.resolveRecordingPath(
+                                target.removePrefix(fullProxyPrefix), proxyRoot, proxyRoot
+                            )
+                        } else {
+                            RecordingMediaPolicy.resolveRecordingPath(
+                                target.removePrefix(recordingsPrefix), activeRoots[0], activeRoots[1]
+                            )
+                        } ?: return writeText(output, 404, "Not Found")
                         if (!file.isFile || file.length() <= 0L) {
                             return writeText(output, 404, "Not Found")
                         }

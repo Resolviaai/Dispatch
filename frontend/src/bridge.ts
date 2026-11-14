@@ -162,6 +162,7 @@ declare global {
       clearLegacyRecordings?: () => boolean;
       getAppVersionInfo?: () => string;
       openDownloadUrl?: (url: string) => boolean;
+      cacheFullProxy?: (clipId: string, remoteUrl: string, authHeader: string) => string;
     };
   }
 }
@@ -709,6 +710,22 @@ export const Bridge = {
       return true;
     }
     return false;
+  },
+
+  /**
+   * Kicks off the native full-proxy download for a clip. Returns the bridge's
+   * JSON verdict ({ok, started, url?}) or null on desktop where the bridge and
+   * the download flow do not exist (desktop streams the PC URL directly).
+   */
+  cacheFullProxy(clipId: string, remoteUrl: string, authHeader: string): { ok: boolean; started: boolean; url?: string } | null {
+    if (typeof window === 'undefined' || !window.DispatchBridge?.cacheFullProxy) return null;
+    try {
+      const raw = window.DispatchBridge.cacheFullProxy(clipId, remoteUrl, authHeader);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn('cacheFullProxy bridge call failed', e);
+      return null;
+    }
   },
 
   addAuthCallbackListener(listener: AuthCallbackListener): () => void {

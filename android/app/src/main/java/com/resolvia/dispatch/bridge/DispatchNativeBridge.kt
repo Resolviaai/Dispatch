@@ -46,6 +46,7 @@ import com.resolvia.dispatch.data.AppDatabase
 import com.resolvia.dispatch.data.PairingManager
 import com.resolvia.dispatch.data.SegmentEntity
 import com.resolvia.dispatch.data.durationSeconds
+import com.resolvia.dispatch.media.RecordingHttpServer
 
 import com.resolvia.dispatch.recorder.CameraCaptureManager
 
@@ -406,6 +407,191 @@ class DispatchNativeBridge(
     @JavascriptInterface
 
     fun getAuthToken(): String = pairingManager.pcAuthToken
+
+    /** In-flight guard so repeated cacheFullProxy calls share one download. */
+    private val fullProxyInFlight: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+    /** Dedicated client for full-proxy downloads: a long transcode streams for
+     *  minutes, far beyond the default 5s/10s bridge client. */
+    private val fullProxyHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * Downloads the PC's full-source proxy into `cacheDir/full_proxies/{clipId}.mp4`
+     * (disk only, never memory) and reports progress/ready/failed via camera events.
+     * The PC may answer 202 while transcoding; this loop polls until bytes arrive.
+     * Partial downloads resume via HTTP Range; the finished file is served to the
+     * WebView through [RecordingHttpServer.fullProxyUrl]. Returns JSON:
+     * `{ok, started, url?}` — started=false means already cached or in flight.
+     */
+    @JavascriptInterface
+
+    fun cacheFullProxy(clipId: String, remoteUrl: String, authHeader: String): String {
+        val cleanClipId = clipId.trim()
+        if (!Regex("^[A-Za-z0-9_-]{1,128}$").matches(cleanClipId)) {
+            return fullProxyErrorJson("invalid_clip_id")
+        }
+        val cleanUrl = remoteUrl.trim()
+        if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+            return fullProxyErrorJson("invalid_url")
+        }
+
+        RecordingHttpServer.ensureStarted(activity)
+
+        val cacheDir = java.io.File(activity.cacheDir, "full_proxies").apply { if (!exists()) mkdirs() }
+        val finalFile = java.io.File(cacheDir, "$cleanClipId.mp4")
+        val tmpFile = java.io.File(cacheDir, "$cleanClipId.mp4.tmp")
+
+        if (finalFile.isFile && finalFile.length() > 0L) {
+            val url = RecordingHttpServer.fullProxyUrl(finalFile.name)
+                ?: return fullProxyErrorJson("media_server_unavailable")
+            sendCameraEvent("full_proxy_ready", JsonObject().apply {
+                addProperty("clipId", cleanClipId)
+                addProperty("url", url)
+            })
+            return JsonObject().apply {
+                addProperty("ok", true)
+                addProperty("started", false)
+                addProperty("url", url)
+            }.toString()
+        }
+
+        if (!fullProxyInFlight.add(cleanClipId)) {
+            return JsonObject().apply {
+                addProperty("ok", true)
+                addProperty("started", false)
+            }.toString()
+        }
+
+        Thread({
+            try {
+                downloadFullProxy(cleanClipId, cleanUrl, authHeader, tmpFile, finalFile)
+            } catch (e: Exception) {
+                android.util.Log.e("DispatchBridge", "cacheFullProxy failed for $cleanClipId: ${e.message}")
+                sendCameraEvent("full_proxy_failed", JsonObject().apply {
+                    addProperty("clipId", cleanClipId)
+                    addProperty("error", e.message ?: "download failed")
+                })
+            } finally {
+                fullProxyInFlight.remove(cleanClipId)
+            }
+        }, "full-proxy-$cleanClipId").apply {
+            isDaemon = true
+            start()
+        }
+        return JsonObject().apply {
+            addProperty("ok", true)
+            addProperty("started", true)
+        }.toString()
+    }
+
+    private fun fullProxyErrorJson(code: String): String = JsonObject().apply {
+        addProperty("ok", false)
+        addProperty("error", code)
+    }.toString()
+
+    private fun downloadFullProxy(
+        clipId: String,
+        remoteUrl: String,
+        authHeader: String,
+        tmpFile: java.io.File,
+        finalFile: java.io.File
+    ) {
+        val pollDeadlineMs = android.os.SystemClock.elapsedRealtime() + 30L * 60_000L
+        while (true) {
+            val existing = if (tmpFile.isFile) tmpFile.length() else 0L
+            val builder = Request.Builder().url(remoteUrl)
+            if (authHeader.isNotBlank()) builder.header("x-auth-token", authHeader.trim())
+            if (existing > 0L) builder.header("Range", "bytes=$existing-")
+
+            fullProxyHttpClient.newCall(builder.build()).execute().use { resp ->
+                when (resp.code) {
+                    202 -> {
+                        if (android.os.SystemClock.elapsedRealtime() > pollDeadlineMs) {
+                            throw RuntimeException("full-proxy generation timed out")
+                        }
+                        Thread.sleep(2000)
+                    }
+                    200 -> {
+                        if (existing > 0L) tmpFile.delete()
+                        streamFullProxyBody(resp, tmpFile, append = false, clipId = clipId, totalBytes = resp.header("Content-Length")?.toLongOrNull() ?: -1L, finalFile = finalFile)
+                        return
+                    }
+                    206 -> {
+                        val rangeStart = resp.header("Content-Range")
+                            ?.substringAfter("bytes ")?.substringBefore('-')?.toLongOrNull()
+                        when (rangeStart) {
+                            existing -> streamFullProxyBody(
+                                resp, tmpFile, append = true, clipId = clipId,
+                                totalBytes = resp.header("Content-Range")?.substringAfterLast('/')?.toLongOrNull() ?: -1L,
+                                finalFile = finalFile
+                            )
+                            0L -> {
+                                tmpFile.delete()
+                                streamFullProxyBody(resp, tmpFile, append = false, clipId = clipId, totalBytes = -1L, finalFile = finalFile)
+                            }
+                            else -> throw RuntimeException("full-proxy resume mismatch (bytes $rangeStart of $existing)")
+                        }
+                        return
+                    }
+                    else -> throw RuntimeException("full-proxy HTTP ${resp.code}")
+                }
+            }
+        }
+    }
+
+    private fun streamFullProxyBody(
+        resp: okhttp3.Response,
+        tmpFile: java.io.File,
+        append: Boolean,
+        clipId: String,
+        totalBytes: Long,
+        finalFile: java.io.File
+    ) {
+        val body = resp.body ?: throw RuntimeException("full-proxy response had no body")
+        var written = if (append && tmpFile.isFile) tmpFile.length() else 0L
+        java.io.FileOutputStream(tmpFile, append).use { out ->
+            val src = body.byteStream()
+            val buffer = ByteArray(256 * 1024)
+            var lastEventMs = 0L
+            while (true) {
+                val read = src.read(buffer)
+                if (read < 0) break
+                out.write(buffer, 0, read)
+                written += read
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastEventMs >= 500) {
+                    lastEventMs = now
+                    sendCameraEvent("full_proxy_progress", JsonObject().apply {
+                        addProperty("clipId", clipId)
+                        addProperty("bytes", written)
+                        if (totalBytes > 0) addProperty("totalBytes", totalBytes)
+                    })
+                }
+            }
+            out.flush()
+        }
+        if (tmpFile.length() <= 0L) throw RuntimeException("full-proxy download was empty")
+        if (!tmpFile.renameTo(finalFile)) {
+            tmpFile.copyTo(finalFile, overwrite = true)
+            tmpFile.delete()
+        }
+        RecordingHttpServer.ensureStarted(activity)
+        val url = RecordingHttpServer.fullProxyUrl(finalFile.name)
+            ?: throw RuntimeException("media server unavailable")
+        sendCameraEvent("full_proxy_ready", JsonObject().apply {
+            addProperty("clipId", clipId)
+            addProperty("url", url)
+            resp.header("X-Source-Duration")?.toDoubleOrNull()?.let {
+                addProperty("sourceDuration", it)
+            }
+        })
+    }
 
 
 

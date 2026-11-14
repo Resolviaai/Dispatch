@@ -332,6 +332,44 @@ async function selectOne<T>(env: Env, table: string, id: string, columns: string
   return ((await res.json()) as T[])[0] ?? null;
 }
 
+/**
+ * Reclaims one superseded edit_window proxy: the R2 bytes and media row are
+ * removed only when no ready window OTHER than the excluded ones still holds
+ * the object, and only for edit_window-kind media, so a wrong guess costs a
+ * re-stage rather than an unplayable clip. Never throws — reclamation is
+ * cleanup, never a reason to fail the calling flow. Returns true when the
+ * object was actually reclaimed.
+ */
+async function reclaimSupersededEditWindowMedia(
+  env: Env,
+  userId: string,
+  mediaId: string,
+  excludeWindowIds: string[],
+): Promise<boolean> {
+  try {
+    const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+    let holderQuery = `${env.SUPABASE_URL}/rest/v1/edit_windows?media_object_id=eq.${encodeURIComponent(mediaId)}&status=eq.ready&select=id&limit=1`;
+    if (excludeWindowIds.length > 0) {
+      holderQuery += `&id=not.in.(${excludeWindowIds.map(encodeURIComponent).join(",")})`;
+    }
+    const holdersRes = await fetch(holderQuery, { headers: svc });
+    const holders = holdersRes.ok ? (await holdersRes.json() as Array<{ id: string }>) : [];
+    if (Array.isArray(holders) && holders.length > 0) return false;
+    const old = await selectOne<MediaObj>(env, "media_objects", mediaId, "id,user_id,status,kind,staging_key,final_key");
+    if (!old || old.user_id !== userId || old.kind !== "edit_window"
+        || old.status === "deleted" || old.status === "deletion_pending") {
+      return false;
+    }
+    await rpc(env, "cloud_mark_deletion", { p_media_id: mediaId });
+    if (old.final_key) await env.BUCKET.delete(old.final_key);
+    if (old.staging_key) await env.BUCKET.delete(old.staging_key).catch(() => {});
+    await rpc(env, "cloud_confirm_deletion", { p_media_id: mediaId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class ProviderAuthError extends Error {
   readonly code: "not_connected" | "needs_reauth" | "ambiguous_owner" | "legacy_reauth_required" | "refresh_failed" | "vault_error";
   readonly status: number;
@@ -6039,6 +6077,33 @@ export default {
         return json(200, { deleted: true });
       }
 
+      // Supersede-window (full-proxy Phase 3): the phone cached the clip's
+      // full-source proxy locally, so the ready R2 edit_window proxies stop
+      // consuming quota. Window rows and window_transcripts stay — transcripts
+      // are source-relative and reusable when a window is re-staged later.
+      const supersedeWindowMatch = url.pathname.match(/^\/clips\/([^/]+)\/supersede-window$/);
+      if (request.method === "POST" && supersedeWindowMatch) {
+        const localClipId = decodeURIComponent(supersedeWindowMatch[1]).slice(0, 128);
+        if (!localClipId) return json(400, { error: "invalid clip id" });
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        const clipRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,local_clip_id&limit=1`,
+          { headers: svc });
+        const clipRows = clipRes.ok ? (await clipRes.json() as Array<{ id: string; local_clip_id: string }>) : [];
+        const clip = clipRows[0];
+        if (!clip) return json(404, { error: "clip not found" });
+        const windowsRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/edit_windows?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(clip.local_clip_id)}&status=eq.ready&media_object_id=not.is.null&select=id,media_object_id`,
+          { headers: svc });
+        const windows = windowsRes.ok ? (await windowsRes.json() as Array<{ id: string; media_object_id: string | null }>) : [];
+        let reclaimed = 0;
+        for (const w of Array.isArray(windows) ? windows : []) {
+          if (!w.media_object_id) continue;
+          if (await reclaimSupersededEditWindowMedia(env, userId, w.media_object_id, [w.id])) reclaimed++;
+        }
+        return json(200, { superseded: true, windows_considered: Array.isArray(windows) ? windows.length : 0, reclaimed });
+      }
+
             // Project Document Timeline Editing (Stage 2 Mobile Endpoints):
       // Single authoritative document, CAS optimistic concurrency, and persistent undo/redo.
       if (request.method === "GET" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline")) {
@@ -7193,29 +7258,9 @@ export default {
               // The bytes this window used to own would otherwise stay
               // status='active' forever and keep counting against the quota:
               // one five-second clip accumulated 37 superseded proxies and
-              // 1.2 GB. Reclaim only when no other live window still points at
-              // the same object, and only for edit_window proxies, so a wrong
-              // guess costs a re-stage rather than an unplayable clip.
+              // 1.2 GB.
               if (previousMediaId && previousMediaId !== mediaObjectId) {
-                try {
-                  const holdersRes = await fetch(
-                    `${env.SUPABASE_URL}/rest/v1/edit_windows?media_object_id=eq.${encodeURIComponent(previousMediaId)}&status=eq.ready&id=neq.${encodeURIComponent(windowId)}&select=id&limit=1`,
-                    { headers: svc }
-                  );
-                  const holders = holdersRes.ok ? (await holdersRes.json() as Array<{ id: string }>) : [];
-                  if (!Array.isArray(holders) || holders.length === 0) {
-                    const old = await selectOne<MediaObj>(env, "media_objects", previousMediaId, "id,user_id,status,kind,staging_key,final_key");
-                    if (old && old.user_id === userId && old.kind === "edit_window"
-                        && old.status !== "deleted" && old.status !== "deletion_pending") {
-                      await rpc(env, "cloud_mark_deletion", { p_media_id: previousMediaId });
-                      if (old.final_key) await env.BUCKET.delete(old.final_key);
-                      if (old.staging_key) await env.BUCKET.delete(old.staging_key).catch(() => {});
-                      await rpc(env, "cloud_confirm_deletion", { p_media_id: previousMediaId });
-                    }
-                  }
-                } catch {
-                  // Reclamation is cleanup, never a reason to fail a sync.
-                }
+                await reclaimSupersededEditWindowMedia(env, userId, previousMediaId, [windowId]);
               }
             }
             if (windowId && words.length > 0) {

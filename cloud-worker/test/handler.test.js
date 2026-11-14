@@ -1998,3 +1998,55 @@ test("/media/:id/stream OPTIONS returns 204 with CORS headers", async () => {
   assert.equal(res.headers.get("Access-Control-Allow-Origin"), "*");
   assert.match(res.headers.get("Access-Control-Allow-Methods"), /GET/);
 });
+
+test("/clips/:id/supersede-window requires auth", async () => {
+  const res = await post(`/clips/clip_local/supersede-window`, {}, { "content-type": "application/json" });
+  assert.equal(res.status, 401);
+});
+
+test("/clips/:id/supersede-window reclaims the clip's ready edit-window media", async () => {
+  let markDeletion = 0;
+  let confirmDeletion = 0;
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [{ id: "c-cloud-uuid", local_clip_id: "clip_local" }] }) });
+  supabase.set("edit_windows?user_id=", { fn: () => ({ body: [{ id: "w-1", media_object_id: MEDIA }] }) });
+  supabase.set("edit_windows?media_object_id=", { fn: () => ({ body: [] }) });
+  supabase.set("media_objects?id=", { fn: () => ({ body: [{ id: MEDIA, user_id: USER_A, status: "active", kind: "edit_window", staging_key: "staging/e", final_key: "final/e" }] }) });
+  supabase.set("/rpc/cloud_mark_deletion", { method: "POST", fn: () => { markDeletion++; return { body: null }; } });
+  supabase.set("/rpc/cloud_confirm_deletion", { method: "POST", fn: () => { confirmDeletion++; return { body: null }; } });
+
+  const res = await post(`/clips/clip_local/supersede-window`, {});
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.superseded, true);
+  assert.equal(body.windows_considered, 1);
+  assert.equal(body.reclaimed, 1);
+  assert.deepEqual(bucket.deleted.slice().sort(), ["final/e", "staging/e"]);
+  assert.equal(markDeletion, 1);
+  assert.equal(confirmDeletion, 1);
+});
+
+test("/clips/:id/supersede-window keeps media another ready window still holds", async () => {
+  let markDeletion = 0;
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [{ id: "c2", local_clip_id: "clip_local2" }] }) });
+  supabase.set("edit_windows?user_id=", { fn: () => ({ body: [{ id: "w-1", media_object_id: MEDIA }] }) });
+  supabase.set("edit_windows?media_object_id=", { fn: () => ({ body: [{ id: "w-2" }] }) });
+  supabase.set("/rpc/cloud_mark_deletion", { method: "POST", fn: () => { markDeletion++; return { body: null }; } });
+
+  const res = await post(`/clips/clip_local2/supersede-window`, {});
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).reclaimed, 0);
+  assert.deepEqual(bucket.deleted, []);
+  assert.equal(markDeletion, 0);
+});
+
+test("/clips/:id/supersede-window refuses media owned by another user", async () => {
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [{ id: "c3", local_clip_id: "clip_local3" }] }) });
+  supabase.set("edit_windows?user_id=", { fn: () => ({ body: [{ id: "w-1", media_object_id: MEDIA }] }) });
+  supabase.set("edit_windows?media_object_id=", { fn: () => ({ body: [] }) });
+  supabase.set("media_objects?id=", { fn: () => ({ body: [{ id: MEDIA, user_id: USER_B, status: "active", kind: "edit_window", staging_key: "s", final_key: "f" }] }) });
+
+  const res = await post(`/clips/clip_local3/supersede-window`, {});
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).reclaimed, 0);
+  assert.deepEqual(bucket.deleted, []);
+});

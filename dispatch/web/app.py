@@ -91,6 +91,14 @@ _CLIP_MUTATION_LOCKS_GUARD = threading.Lock()
 _FFMPEG_CONCURRENCY_LIMIT = 2
 _FFMPEG_SEMAPHORE = threading.BoundedSemaphore(_FFMPEG_CONCURRENCY_LIMIT)
 
+# Local full-proxy cache (GET /api/clips/{id}/full-proxy): one generation thread
+# per clip, mp4 + sidecar meta under PROCESSING_DIR/proxies. Local-only artifact,
+# never staged to R2.
+_FULL_PROXY_DIR = PROCESSING_DIR / "proxies"
+_FULL_PROXY_LOCKS_GUARD = threading.Lock()
+_FULL_PROXY_GENERATING: set = set()
+_FULL_PROXY_MAX_GAP_CHUNK_SECONDS = 600.0
+
 
 @contextlib.contextmanager
 def _acquire_ffmpeg_slot(timeout_seconds: float = 30.0):
@@ -1499,6 +1507,361 @@ def get_clip_source_media(clip_id: str, request: Request):
 def get_recording_source_media(segment_id: str, request: Request):
     """Safely stream the original raw source video chunk for a session segment."""
     return get_clip_source_media(segment_id, request)
+
+
+# ------------------------------------------------------- local full proxy
+
+
+def _load_clip_for_source_media(clip_id: str, request: Request):
+    """Auth/ownership gate for the local full-proxy endpoints. Mirrors the /source
+    route: paired token or trusted LAN peer, traversal refusal, owner chain through
+    the parent chunk."""
+    if "/" in clip_id or "\\" in clip_id or ".." in clip_id or "\x00" in clip_id:
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
+    clip = db.get_clip_by_id(clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    owner_id = clip.get("user_id")
+    if not owner_id and clip.get("chunk_id"):
+        parent_chunk = db.get_chunk_by_id(clip["chunk_id"])
+        if parent_chunk:
+            owner_id = parent_chunk.get("user_id")
+    caller_user_id = resolve_caller_user_id(request, allow_lan_peer=True)
+    _enforce_source_media_owner(owner_id, caller_user_id)
+    return clip, (caller_user_id or owner_id)
+
+
+def _full_proxy_paths(clip_id: str) -> Tuple[Path, Path]:
+    return (_FULL_PROXY_DIR / f"{clip_id}.mp4", _FULL_PROXY_DIR / f"{clip_id}.meta.json")
+
+
+def _probe_media_duration(path: Path) -> Dict[str, Any]:
+    from dispatch.ingestion.validator import inspect_video_orientation
+    try:
+        info = inspect_video_orientation(path)
+    except Exception:
+        return {}
+    return info if isinstance(info, dict) else {}
+
+
+def _valid_full_proxy_cache(clip_id: str, source_path: Path) -> Optional[Dict[str, Any]]:
+    """Sidecar meta when {clip_id}.mp4 exists AND the source file is unchanged
+    since generation; None when the cache must be (re)generated."""
+    mp4, meta_path = _full_proxy_paths(clip_id)
+    if not mp4.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    try:
+        duration = float(meta.get("duration") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if duration <= 0.0:
+        return None
+    try:
+        st = source_path.stat()
+    except OSError:
+        return None
+    if int(meta.get("source_mtime", -1)) != int(st.st_mtime) or int(meta.get("source_size", -1)) != int(st.st_size):
+        return None
+    return meta
+
+
+def _generate_full_proxy(clip_id: str, source_path: Path) -> None:
+    """Transcode the whole canonical source into the local faststart proxy cache.
+    Exactly one thread per clip (guarded by _FULL_PROXY_GENERATING); failures clean
+    the .tmp so the next request retries."""
+    from dispatch.edit_windows import build_full_proxy_cmd
+
+    mp4, meta_path = _full_proxy_paths(clip_id)
+    tmp = mp4.with_name(mp4.name + ".tmp")
+    try:
+        try:
+            _FULL_PROXY_DIR.mkdir(parents=True, exist_ok=True)
+            src_stat = source_path.stat()
+            src_meta = _probe_media_duration(source_path)
+            src_duration = float(src_meta.get("duration") or 0.0)
+            if src_duration <= 0.0:
+                raise RuntimeError("source duration probe failed")
+            with _acquire_ffmpeg_slot(timeout_seconds=60.0):
+                cmd = build_full_proxy_cmd(
+                    str(source_path), str(tmp),
+                    source_width=int(src_meta.get("effective_width") or src_meta.get("width") or 0),
+                    source_height=int(src_meta.get("effective_height") or src_meta.get("height") or 0),
+                    orientation=src_meta.get("orientation"),
+                )
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=3600,
+                    **low_priority_subprocess_kwargs(),
+                )
+            if proc.returncode != 0 or not tmp.is_file():
+                raise RuntimeError(f"ffmpeg full-proxy failed rc={proc.returncode}")
+            proxy_meta = _probe_media_duration(tmp)
+            proxy_duration = float(proxy_meta.get("duration") or 0.0)
+            if abs(proxy_duration - src_duration) > 1.0:
+                raise RuntimeError(f"full-proxy duration {proxy_duration} != source {src_duration}")
+            if not proxy_meta.get("has_audio", False):
+                raise RuntimeError("full-proxy is missing the audio track")
+            tmp.replace(mp4)
+            meta_path.write_text(json.dumps({
+                "clip_id": clip_id,
+                "duration": src_duration,
+                "width": int(proxy_meta.get("effective_width") or proxy_meta.get("width") or 0),
+                "height": int(proxy_meta.get("effective_height") or proxy_meta.get("height") or 0),
+                "source_mtime": int(src_stat.st_mtime),
+                "source_size": int(src_stat.st_size),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }), encoding="utf-8")
+        except Exception as e:
+            logger.warning("Full-proxy generation failed for clip %s: %s", clip_id, e)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+    finally:
+        _FULL_PROXY_GENERATING.discard(clip_id)
+
+
+@app.api_route("/api/clips/{clip_id}/full-proxy", methods=["GET", "HEAD"])
+def get_clip_full_proxy(clip_id: str, request: Request):
+    """Faststart 720p proxy of the ENTIRE canonical raw source, generated on demand
+    and cached on the PC. Served with HTTP Range (206) for smooth scrubbing and
+    X-Source-Duration for the client's full-source timebase switch. Local cache
+    artifact only — never staged to R2 or quota-counted. 202 while generating."""
+    clip, _effective_user_id = _load_clip_for_source_media(clip_id, request)
+    source_path = resolve_canonical_source_asset(clip)
+    if not source_path or not source_path.exists():
+        raise HTTPException(status_code=404, detail="Source media not found on disk")
+    resolved_source = source_path.resolve()
+
+    meta = _valid_full_proxy_cache(clip_id, resolved_source)
+    if meta is None:
+        with _FULL_PROXY_LOCKS_GUARD:
+            already = clip_id in _FULL_PROXY_GENERATING
+            if not already:
+                _FULL_PROXY_GENERATING.add(clip_id)
+        if not already:
+            threading.Thread(
+                target=_generate_full_proxy, args=(clip_id, resolved_source),
+                name=f"full-proxy-{clip_id[:8]}", daemon=True,
+            ).start()
+        return JSONResponse(status_code=202, content={"status": "generating"})
+
+    mp4, _meta_path = _full_proxy_paths(clip_id)
+    st = mp4.stat()
+    mtime = int(st.st_mtime)
+    etag = f'"{mtime}-{st.st_size}"'
+    headers = {
+        "Accept-Ranges": "bytes",
+        "X-Source-Duration": f"{float(meta['duration']):.3f}",
+        "ETag": etag,
+        "Last-Modified": email.utils.formatdate(mtime, usegmt=True),
+        "Cache-Control": "private, max-age=3600",
+    }
+    if not request.headers.get("range") and request.method in ("GET", "HEAD"):
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match and if_none_match.strip() in (etag, f"W/{etag}", "*"):
+            return Response(status_code=304, headers=headers)
+    return FileResponse(path=str(mp4), media_type="video/mp4", headers=headers)
+
+
+class TranscribeRangeRequest(BaseModel):
+    ranges: List[List[float]]
+
+
+def _word_coverage_spans(words: List[Dict[str, Any]], tolerance: float = 2.0) -> List[Tuple[float, float]]:
+    """Merge word times into covered spans, bridging silences <= tolerance so
+    quiet stretches do not re-trigger paid transcription."""
+    spans: List[Tuple[float, float]] = []
+    for w in words:
+        try:
+            ws, we = float(w.get("start", 0.0)), float(w.get("end", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if we <= ws:
+            continue
+        if spans and ws - spans[-1][1] <= tolerance:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], we))
+        else:
+            spans.append((ws, we))
+    return spans
+
+
+def _merge_word_lists(primary: List[Dict[str, Any]], extra: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    for w in primary:
+        try:
+            seen.add((round(float(w.get("start", 0.0)), 3), round(float(w.get("end", 0.0)), 3),
+                      str(w.get("word") or w.get("text") or "")))
+        except (TypeError, ValueError):
+            continue
+    out = list(primary)
+    for w in extra:
+        try:
+            key = (round(float(w.get("start", 0.0)), 3), round(float(w.get("end", 0.0)), 3),
+                   str(w.get("word") or w.get("text") or ""))
+        except (TypeError, ValueError):
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(w)
+    out.sort(key=lambda w: (float(w.get("start", 0.0)), float(w.get("end", 0.0))))
+    return out
+
+
+def _load_db_transcript_words(clip: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Source-absolute precision words from the PC transcript store (chunk or
+    session level). Seeds the transcribe-range cache so ranges ingest already
+    transcribed never re-pay for Gemini."""
+    chunk_id = clip.get("chunk_id")
+    session_id = clip.get("session_id")
+    segments: List[Dict[str, Any]] = []
+    try:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            if chunk_id:
+                cursor.execute("SELECT segments_json FROM transcripts WHERE chunk_id = ?", (chunk_id,))
+                row = cursor.fetchone()
+                if row and row["segments_json"]:
+                    try:
+                        segments = json.loads(row["segments_json"])
+                    except Exception:
+                        segments = []
+            if not segments and session_id:
+                cursor.execute("SELECT segments_json FROM transcripts WHERE session_id = ? LIMIT 1", (session_id,))
+                row = cursor.fetchone()
+                if row and row["segments_json"]:
+                    try:
+                        segments = json.loads(row["segments_json"])
+                    except Exception:
+                        segments = []
+    except Exception as err:
+        logger.warning("Transcript seed lookup failed for clip %s: %s", clip.get("id"), err)
+        return []
+    words: List[Dict[str, Any]] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        for w in seg.get("words", []) or []:
+            if not isinstance(w, dict):
+                continue
+            try:
+                ws, we = float(w.get("start", 0.0)), float(w.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            text = str(w.get("word") or w.get("text") or "").strip()
+            if not text or we <= ws:
+                continue
+            words.append({
+                "word": text, "start": round(ws, 3), "end": round(we, 3),
+                "is_exact": bool(w.get("is_exact", True)),
+            })
+    words.sort(key=lambda w: (float(w["start"]), float(w["end"])))
+    return words
+
+
+@app.post("/api/clips/{clip_id}/transcribe-range")
+def transcribe_clip_source_range(clip_id: str, request: Request, body: TranscribeRangeRequest):
+    """Transcribe source-absolute ranges of the clip's canonical raw source into
+    precision words (Gemini), cached at PROCESSING_DIR/proxies/{clip_id}.words.json.
+    Coverage is seeded from the PC transcript store first, so only genuinely
+    uncovered subranges are paid for; the response partitions ALL cached words
+    into 2-3 word caption cards via group_words_into_captions. A range with
+    end <= 0 means 'to the end of the source'."""
+    clip, effective_user_id = _load_clip_for_source_media(clip_id, request)
+    source_path = resolve_canonical_source_asset(clip)
+    if not source_path or not source_path.exists():
+        raise HTTPException(status_code=404, detail="Source media not found on disk")
+
+    words_path = _FULL_PROXY_DIR / f"{clip_id}.words.json"
+    words: List[Dict[str, Any]] = []
+    try:
+        cached = json.loads(words_path.read_text(encoding="utf-8"))
+        if isinstance(cached, dict) and isinstance(cached.get("words"), list):
+            words = [w for w in cached["words"] if isinstance(w, dict)]
+    except Exception:
+        words = []
+    db_words = _load_db_transcript_words(clip)
+    if db_words:
+        words = _merge_word_lists(words, db_words)
+
+    src_meta = _probe_media_duration(source_path)
+    try:
+        source_duration = float(src_meta.get("duration") or 0.0)
+    except (TypeError, ValueError):
+        source_duration = 0.0
+
+    ranges: List[Tuple[float, float]] = []
+    for r in (body.ranges or [])[:4]:
+        try:
+            s, e = float(r[0]), float(r[1])
+        except (TypeError, ValueError, IndexError):
+            raise HTTPException(status_code=400, detail="Each range must be [start, end]")
+        if s < 0.0:
+            s = 0.0
+        if e <= 0.0:
+            e = source_duration if source_duration > 0.0 else 4 * 3600.0
+        if source_duration > 0.0:
+            e = min(e, source_duration)
+        if e <= s or (e - s) > 4 * 3600.0:
+            continue
+        ranges.append((round(s, 3), round(e, 3)))
+
+    transcribed: List[List[float]] = []
+    if ranges:
+        gap_fn = _make_stage2_gap_transcriber(clip, effective_user_id)
+        if gap_fn is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Source transcription unavailable (missing raw source or Gemini API key)",
+            )
+        from dispatch.edit_windows import uncovered_ranges
+        covered = _word_coverage_spans(words)
+        holes: List[Tuple[float, float]] = []
+        for s, e in ranges:
+            holes.extend(uncovered_ranges((s, e), covered))
+        for hs, he in holes:
+            cursor = hs
+            while cursor < he - 0.01:
+                chunk_end = min(he, cursor + _FULL_PROXY_MAX_GAP_CHUNK_SECONDS)
+                try:
+                    words.extend(gap_fn(cursor, chunk_end) or [])
+                except Exception as err:
+                    logger.warning("Gap transcription failed for clip %s [%.2f, %.2f]: %s", clip_id, cursor, chunk_end, err)
+                transcribed.append([round(cursor, 3), round(chunk_end, 3)])
+                cursor = chunk_end
+
+    if transcribed:
+        words.sort(key=lambda w: (float(w.get("start", 0.0)), float(w.get("end", 0.0))))
+        try:
+            _FULL_PROXY_DIR.mkdir(parents=True, exist_ok=True)
+            words_path.write_text(json.dumps({
+                "clip_id": clip_id,
+                "words": words,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }), encoding="utf-8")
+        except OSError as err:
+            logger.warning("Could not persist transcribe-range cache for clip %s: %s", clip_id, err)
+
+    segments = [{
+        "start": float(words[0]["start"]) if words else 0.0,
+        "end": float(words[-1]["end"]) if words else 0.0,
+        "words": words,
+    }]
+    segments = transliterate_segments_to_hinglish(segments, user_id=effective_user_id)
+    track = group_words_into_captions(
+        raw_segments=segments, clip_start=0.0, clip_end=float("inf"),
+        clip_id=clip_id, words_per_group=3,
+    )
+    return {
+        "clip_id": clip_id,
+        "transcribed": transcribed,
+        "words": words,
+        "groups": track.to_dict().get("groups", []),
+        "word_count": len(words),
+    }
 
 
 def is_matching_layout(a: Optional[str], b: Optional[str]) -> bool:

@@ -194,6 +194,35 @@ def ffprobe_validate_proxy(
 
 # ------------------------------------------------------------------ staging
 
+def _proxy_scale_filter(
+    source_width: Optional[int] = None,
+    source_height: Optional[int] = None,
+    orientation: Optional[str] = None,
+) -> str:
+    """Orientation-aware even scaling within 720p portrait/landscape bounds,
+    zero letterbox padding. Shared by window proxies and the local full proxy."""
+    if source_width and source_height and int(source_width) > 0 and int(source_height) > 0:
+        tw, th = _fit_proxy_dimensions(int(source_width), int(source_height))
+        return f"scale={tw}:{th},setsar=1"
+    if orientation and str(orientation).strip().lower() == "portrait":
+        return (
+            f"scale={PROXY_HEIGHT}:{PROXY_WIDTH}:force_original_aspect_ratio=decrease,"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
+        )
+    if orientation and str(orientation).strip().lower() == "landscape":
+        return (
+            f"scale={PROXY_WIDTH}:{PROXY_HEIGHT}:force_original_aspect_ratio=decrease,"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
+        )
+    return (
+        "scale="
+        f"w='trunc(iw*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
+        f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2':"
+        f"h='trunc(ih*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
+        f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2',setsar=1"
+    )
+
+
 def build_proxy_cmd(
     source: str,
     out_path: str,
@@ -207,28 +236,7 @@ def build_proxy_cmd(
     """720p30 edit proxy of the bounded window. Preserves source orientation and aspect
     ratio without forced 16:9 letterboxing; bitrate is a target, actual bytes verified."""
     dur = round(window_end - window_start, 3)
-    if source_width and source_height and int(source_width) > 0 and int(source_height) > 0:
-        tw, th = _fit_proxy_dimensions(int(source_width), int(source_height))
-        vf = f"scale={tw}:{th},setsar=1"
-    elif orientation and str(orientation).strip().lower() == "portrait":
-        vf = (
-            f"scale={PROXY_HEIGHT}:{PROXY_WIDTH}:force_original_aspect_ratio=decrease,"
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
-        )
-    elif orientation and str(orientation).strip().lower() == "landscape":
-        vf = (
-            f"scale={PROXY_WIDTH}:{PROXY_HEIGHT}:force_original_aspect_ratio=decrease,"
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1"
-        )
-    else:
-        # Orientation-aware even scaling within 720p portrait/landscape bounds, zero letterbox padding.
-        vf = (
-            "scale="
-            f"w='trunc(iw*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
-            f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2':"
-            f"h='trunc(ih*min(if(gt(ih\\,iw)\\,{PROXY_HEIGHT}\\,{PROXY_WIDTH})/iw\\,"
-            f"if(gt(ih\\,iw)\\,{PROXY_WIDTH}\\,{PROXY_HEIGHT})/ih)/2)*2',setsar=1"
-        )
+    vf = _proxy_scale_filter(source_width, source_height, orientation)
     return [
         "ffmpeg", "-y", "-ss", f"{window_start:.3f}", "-i", source,
         "-t", f"{dur:.3f}",
@@ -237,6 +245,31 @@ def build_proxy_cmd(
         "-c:v", "libx264", "-preset", "veryfast", "-b:v", PROXY_VIDEO_BITRATE,
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
+        out_path,
+    ]
+
+
+def build_full_proxy_cmd(
+    source: str,
+    out_path: str,
+    *,
+    source_width: Optional[int] = None,
+    source_height: Optional[int] = None,
+    orientation: Optional[str] = None,
+) -> List[str]:
+    """720p30 faststart proxy of the ENTIRE source — same recipe as the window
+    proxy minus -ss/-t. The full proxy is a local PC cache artifact served over
+    loopback/LAN; it is never staged to R2, so MAX_WINDOW_SECONDS does not apply."""
+    return [
+        "ffmpeg", "-y", "-i", source,
+        "-vf", _proxy_scale_filter(source_width, source_height, orientation),
+        "-r", str(PROXY_FPS),
+        "-c:v", "libx264", "-preset", "veryfast", "-b:v", PROXY_VIDEO_BITRATE,
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        # Out_path may carry a .tmp suffix while the encode is in flight; ffmpeg
+        # cannot infer the muxer from that extension, so the format is explicit.
+        "-f", "mp4",
         out_path,
     ]
 

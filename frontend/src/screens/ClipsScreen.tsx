@@ -1805,6 +1805,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [fullSourceApprovedIds, setFullSourceApprovedIds] = useState<Set<string>>(() => new Set());
   const [cloudBoundaryPrompt, setCloudBoundaryPrompt] = useState<'start' | 'end' | null>(null);
   const pendingFullSourceSeekRef = useRef<number | null>(null);
+  // Phase 3 full-proxy: loopback URLs for clips whose full source is cached on
+  // the device (Android disk cache), plus a live download status for the pill.
+  const [fullProxyUrls, setFullProxyUrls] = useState<Record<string, string>>({});
+  const [fullProxyStatus, setFullProxyStatus] = useState<{ clipId: string; phase: 'loading' | 'progress'; bytes: number; totalBytes: number } | null>(null);
   const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
   const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
   const filmstripReqIdRef = useRef<number>(0);
@@ -1934,6 +1938,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     canRedo,
     resetHistory,
   } = useCaptionHistory(null);
+  const captionTrackRef = useRef<CaptionTrack | null>(null);
+  captionTrackRef.current = captionTrack;
+  const captionClipIdRef = useRef<string | null>(null);
+  captionClipIdRef.current = captionClipId;
 
   // Combined clip list and currently selected clip
   const allClips = useMemo(() => [...readyClips, ...approvedClips], [readyClips, approvedClips]);
@@ -1948,6 +1956,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // the user explicitly approved full-source expansion at the cloud boundary.
   const editorSourceVideoUrl = useMemo(() => {
     if (!currentClip) return undefined;
+    // A cached full proxy (Android disk cache) IS the raw source: served over
+    // loopback with the whole source timeline, so it outranks every candidate.
+    const loopback = fullProxyUrls[currentClip.id];
+    if (loopback) return loopback;
     const hasCloudMedia = Boolean(
       currentClip.edit_window_url ||
       currentClip.remote_url ||
@@ -1960,7 +1972,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (!pcReachable && hasCloudMedia) return undefined;
     // No cloud copy yet: the PC URL stays the only playable candidate.
     return apiUrl(raw || `/api/clips/${currentClip.id}/source`, pcHost);
-  }, [currentClip, pcHost, isPcOnline, fullSourceApprovedIds]);
+  }, [currentClip, pcHost, isPcOnline, fullSourceApprovedIds, fullProxyUrls]);
 
   // Reset the cloud-boundary banner and pending playhead restore on clip switch.
   useEffect(() => {
@@ -3018,6 +3030,26 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       setTimeout(() => setPlaybackFeedback(null), 3500);
       return;
     }
+    // Android: download the PC's full proxy into the native disk cache first;
+    // the loopback media swap happens when the full_proxy_ready event arrives.
+    const auth = window.DispatchBridge?.getAuthToken?.() ?? '';
+    const verdict = Bridge.cacheFullProxy(
+      clip.id,
+      apiUrl(`/api/clips/${clip.id}/full-proxy`, pcHost),
+      auth
+    );
+    if (verdict?.ok) {
+      if (!verdict.url) {
+        setFullProxyStatus({ clipId: clip.id, phase: 'loading', bytes: 0, totalBytes: 0 });
+      }
+      return;
+    }
+    if (verdict && !verdict.ok) {
+      setPlaybackFeedback('Full source could not start — cloud window stays active');
+      setTimeout(() => setPlaybackFeedback(null), 3500);
+      return;
+    }
+    // Desktop (no native cache bridge): stream the PC source URL directly.
     const v = videoRef.current;
     if (v && mediaTimebase === 'proxy' && Number.isFinite(v.currentTime)) {
       // Preserve the visible playhead across the proxy→source timebase switch.
@@ -3098,6 +3130,158 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const sourceDur = Number(currentClip.source_duration || currentClip.end_time || 60);
     return remapCaptionTrackToTimeline(visibleCaptionTrack, effectiveRanges, captionSourceOrigin, sourceDur);
   }, [visibleCaptionTrack, effectiveRanges, currentClip, captionSourceOrigin]);
+
+  const captionSourceOriginRef = useRef(0);
+  captionSourceOriginRef.current = captionSourceOrigin;
+
+  // ---- Phase 3 full-proxy events (native cache bridge → editor swap) ----
+
+  const fetchFullSourceGapCaptions = async (clipId: string) => {
+    const clip = currentClipRef.current;
+    if (!clip || clip.id !== clipId || !pcHost) return;
+    const origin = captionSourceOriginRef.current;
+    const winStart = Math.max(0, Number(clip.edit_window_start ?? 0) || 0);
+    const winEnd = Number(clip.edit_window_end ?? 0) || 0;
+    const ranges: Array<[number, number]> = [];
+    if (origin > 0.05) ranges.push([0, origin]);
+    if (winEnd > 0.05) ranges.push([winEnd, -1]);
+    if (ranges.length === 0) return;
+    try {
+      const res = await fetch(apiUrl(`/api/clips/${clipId}/transcribe-range`, pcHost), {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ranges }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const rawGroups = Array.isArray(data?.groups) ? data.groups : [];
+      if (rawGroups.length === 0) return;
+      // Gap groups arrive source-absolute; the live track is relative to the
+      // caption source origin. Skip groups that overlap existing coverage.
+      const existingSpans = (captionTrackRef.current?.groups ?? []).map((g) => [g.start, g.end] as [number, number]);
+      const shifted = rawGroups
+        .map((g: any, i: number) => {
+          const start = Math.max(0, Number(g?.start ?? 0) - origin);
+          const end = Math.max(start + 0.05, Number(g?.end ?? 0) - origin);
+          const words = (Array.isArray(g?.words) ? g.words : []).map((w: any, wi: number) => ({
+            id: `gapw_${i}_${wi}`,
+            text: String(w?.word ?? w?.text ?? '').trim(),
+            start: Math.max(0, Number(w?.start ?? 0) - origin),
+            end: Math.max(0, Number(w?.end ?? 0) - origin),
+          })).filter((w: any) => w.text && w.end > w.start);
+          return {
+            id: `gap_${i}`,
+            start,
+            end,
+            words,
+            has_word_timing: true,
+            timing_mode: 'word',
+            type: 'caption',
+          };
+        })
+        .filter((g: any) => g.words.length > 0 && !existingSpans.some(([s, e]) => g.start < e && g.end > s));
+      if (shifted.length === 0) return;
+      const current = captionTrackRef.current;
+      if (!current || captionClipIdRef.current !== clipId) return;
+      const mergedRaw = [
+        ...current.groups.map((g) => ({
+          id: g.id,
+          start: g.start,
+          end: g.end,
+          text: g.words.map((w) => w.text).join(' '),
+          words: g.words.map((w) => ({ id: w.id, text: w.text, start: w.start, end: w.end })),
+          has_word_timing: g.has_word_timing,
+          timing_mode: g.timing_mode,
+          type: 'caption',
+        })),
+        ...shifted,
+      ].sort((a, b) => a.start - b.start);
+      const merged = normalizeCaptionTrack(
+        {
+          clip_id: clipId,
+          groups: mergedRaw,
+          is_user_edited: true,
+          default_style: current.default_style,
+          default_layout: current.default_layout,
+          default_animation: current.default_animation,
+        },
+        clipId,
+        Math.max(0.1, current.groups.reduce((mx, g) => Math.max(mx, g.end), 0))
+      );
+      setCaptionTrack(merged, false);
+      captionTrackCache.set(clipId, { track: merged, revision: Number(current.range_revision ?? 0), timestamp: Date.now() });
+    } catch {
+      // Gap captions are an enhancement — never block the full-source switch.
+    }
+  };
+
+  const supersedeCloudWindow = async (clipId: string) => {
+    const clip = currentClipRef.current;
+    const cloudId = (clip && clip.id === clipId ? (clip as any).cloud_id : null) as string | null | undefined;
+    if (!cloudId) return;
+    try {
+      const token = window.DispatchBridge?.getAuthToken?.() ?? '';
+      if (!token) return;
+      await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(String(cloudId))}/supersede-window`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: '{}',
+      });
+    } catch {
+      // Reclamation is best-effort cleanup, never a reason to surface an error.
+    }
+  };
+
+  const fullProxyEventHandlerRef = useRef<(type: string, data: any) => void>(() => {});
+  fullProxyEventHandlerRef.current = (type: string, data: any) => {
+    const clip = currentClipRef.current;
+    if (!clip) return;
+    const clipId = String(data?.clipId ?? '');
+    if (!clipId || clipId !== clip.id) return;
+    if (type === 'full_proxy_progress') {
+      setFullProxyStatus({
+        clipId,
+        phase: 'progress',
+        bytes: Math.max(0, Number(data?.bytes ?? 0)),
+        totalBytes: Math.max(0, Number(data?.totalBytes ?? 0)),
+      });
+      return;
+    }
+    if (type === 'full_proxy_failed') {
+      setFullProxyStatus(null);
+      setPlaybackFeedback('Full source load failed — cloud window stays active');
+      setTimeout(() => setPlaybackFeedback(null), 3500);
+      return;
+    }
+    if (type !== 'full_proxy_ready') return;
+    const url = String(data?.url ?? '');
+    if (!url) return;
+    const v = videoRef.current;
+    if (v && mediaTimebase === 'proxy' && Number.isFinite(v.currentTime)) {
+      // Preserve the visible playhead across the proxy→source timebase switch.
+      pendingFullSourceSeekRef.current = mediaToSourceTime(v.currentTime);
+    }
+    const srcDur = Number(data?.sourceDuration);
+    if (Number.isFinite(srcDur) && srcDur > 0) {
+      setSourceDurationForClip({ clipId, seconds: srcDur });
+    }
+    setFullProxyUrls(prev => ({ ...prev, [clipId]: url }));
+    setFullProxyStatus(null);
+    setFullSourceApprovedIds(prev => {
+      if (prev.has(clipId)) return prev;
+      const next = new Set(prev);
+      next.add(clipId);
+      return next;
+    });
+    void fetchFullSourceGapCaptions(clipId);
+    void supersedeCloudWindow(clipId);
+  };
+
+  useEffect(() => Bridge.onCameraEvent((event) => {
+    if (event.type === 'full_proxy_ready' || event.type === 'full_proxy_progress' || event.type === 'full_proxy_failed') {
+      fullProxyEventHandlerRef.current(event.type, event.data);
+    }
+  }), []);
 
   // CaptionStudio edits the UNREMAPPED track whose times are relative to the
   // caption source origin, so it must receive the playhead in that same space.
@@ -6935,6 +7119,19 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               >
                 <X size={14} />
               </button>
+            </div>
+          )}
+
+          {fullProxyStatus && currentClip && fullProxyStatus.clipId === currentClip.id && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-[440px] rounded-xl bg-surface-100 border border-border shadow-lg px-3.5 py-2.5 flex items-center gap-3 animate-in fade-in">
+              <Cloud size={16} className="text-text-secondary shrink-0" />
+              <div className="min-w-0 flex-1 text-[10px] text-text-muted font-mono tabular-nums truncate">
+                {fullProxyStatus.totalBytes > 0
+                  ? `Loading full source… ${Math.min(99, Math.round((fullProxyStatus.bytes / fullProxyStatus.totalBytes) * 100))}%`
+                  : fullProxyStatus.phase === 'progress'
+                    ? `Loading full source… ${(fullProxyStatus.bytes / (1024 * 1024)).toFixed(1)}&nbsp;MB`
+                    : 'PC is preparing the full source…'}
+              </div>
             </div>
           )}
 
