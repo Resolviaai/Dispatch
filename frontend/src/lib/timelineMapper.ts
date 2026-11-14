@@ -1,11 +1,11 @@
 /**
  * Canonical typed coordinate spaces, TimelineMapper, and RFC-8785 fingerprinting contract.
  *
- * Pure, deterministic, zero-dependency implementation mirrored across:
- *   - frontend/src/lib/timelineMapper.ts
- *   - cloud-worker/src/timelineContract.ts
- *   - dispatch/segments.py & dispatch/lib/timeline_mapper.py
- *   - android/.../timeline/TimelineMapper.kt
+ * Pure, deterministic, zero-dependency implementation. The cloud worker
+ * import-shares this file via cloud-worker/src/timelineContract.ts; Python
+ * (dispatch/segments.py, dispatch/lib/timeline_mapper.py) and Kotlin
+ * (android/.../timeline/TimelineMapper.kt) are pinned mirrors guarded by
+ * contract tests.
  */
 
 export const TIMELINE_CONTRACT_VERSION = 1 as const;

@@ -55,6 +55,8 @@ import { DispatchCaptionRenderer, applyColorOpacity, applyCaseTransform } from '
 import { useCaptionHistory } from '../captions/useCaptionHistory';
 import { preserveWordTimingsOnEdit, splitCaptionGroupAtTime } from '../captions/timingPreservation';
 import { splitAt, roundMs, trimEdge, deletePiece, normalizeRanges, keptDuration, concatToSource, sourceToConcat, remapCaptionTrackToTimeline } from '../captions/timelineEngine';
+import { sourceToProxy, proxyToSource } from '../lib/timelineMapper';
+import type { SourceTime, ProxyTime } from '../lib/timelineMapper';
 import { partitionWordsIntoVisualLines } from '../captions/linePartition';
 import { applySectionStylesToTrack } from '../captions/applyToAll';
 import { apiUrl, Bridge, getAuthHeaders } from '../bridge';
@@ -295,6 +297,9 @@ export interface ClipItem {  id: string;
   captions_source?: string;
   /** Presigned edit-window proxy URL (worker fallback player source). */
   edit_window_url?: string;
+  /** Staged edit-window bounds (source seconds). Media time 0 of the proxy. */
+  edit_window_start?: number;
+  edit_window_end?: number;
   /** True when the worker could not resolve ANY playable/presentable media. */
   media_missing?: boolean;
   /** One row per platform destination, with the latest cached stats. */
@@ -1152,6 +1157,9 @@ export function InteractiveCaptionCanvas({
   );
 }
 
+/** Which media file the player stage is showing; defines the origin of media time. */
+export type MediaTimebase = 'source' | 'proxy' | 'rendered';
+
 interface FramedVideoStageProps {
   sourceVideoUrl?: string;
   videoUrl?: string;
@@ -1167,7 +1175,7 @@ interface FramedVideoStageProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   onTimeUpdate?: () => void;
-  onLoadedMetadata?: (isSourceTimebase?: boolean, mediaDuration?: number) => void;
+  onLoadedMetadata?: (isSourceTimebase?: boolean, mediaDuration?: number, mediaKind?: MediaTimebase) => void;
   videoRef: React.RefObject<HTMLVideoElement>;
   bgVideoRef: React.RefObject<HTMLVideoElement>;
   setIsPlaying: (playing: boolean) => void;
@@ -1244,6 +1252,15 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
 
   const isFallbackTimebase = Boolean(fallbackVideoUrl && activeVideoUrl === fallbackVideoUrl && activeVideoUrl !== _videoUrl);
   const isSourceTimebase = isFallbackTimebase || Boolean(sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl);
+  // Which candidate actually won: rendered output, window proxy, or raw source.
+  // The origin of media time follows the kind (OQ1 parity contract).
+  // Worker hydration collapses video_url onto edit_window_url when no render
+  // exists (cloud-worker mapClipItem), so URL equality with the fallback means
+  // the served media is the window proxy, not a rendered output.
+  const isProxyViaCollapse = Boolean(fallbackVideoUrl && _videoUrl && activeVideoUrl === _videoUrl && _videoUrl === fallbackVideoUrl);
+  const mediaKind: MediaTimebase = isFallbackTimebase || isProxyViaCollapse
+    ? 'proxy'
+    : (sourceVideoUrl && activeVideoUrl === sourceVideoUrl && sourceVideoUrl !== _videoUrl ? 'source' : 'rendered');
 
   // Authoritative aspect ratio determination: governed by layoutMode, targetAspect, and sourceOrientation
   const isTarget169 = useMemo(() => {
@@ -1497,7 +1514,7 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
                 if (v.videoWidth > 0 && v.videoHeight > 0) {
                   setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
                 }
-                onLoadedMetadata?.(isSourceTimebase, v.duration);
+                onLoadedMetadata?.(isSourceTimebase, v.duration, mediaKind);
               }}
               onTimeUpdate={onTimeUpdate}
               onError={() => {
@@ -1778,7 +1795,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
-  const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
+  const [mediaTimebase, setMediaTimebase] = useState<MediaTimebase>('source');
+  // Source-like media (raw source or window proxy) plays through the source-space
+  // EDL logic; only the rendered output is clip-relative.
+  const isSourceTimebase = mediaTimebase !== 'rendered';
   const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
   const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
   const filmstripReqIdRef = useRef<number>(0);
@@ -2943,16 +2963,54 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
 
   const totalSourceDur = Number(timelineSourceDuration || currentClip?.source_duration || clipEnd || 60);
 
+  // Media-time conversion (OQ1): media time = source time − origin, where the
+  // origin is 0 (raw source), edit_window_start (window proxy), or clipStart
+  // (rendered output). Replaces the duration-based timebase heuristics.
+  const proxyWindowStart = Math.max(0, Number(currentClip?.edit_window_start ?? 0) || 0);
+  const proxyWindowEnd = (Number.isFinite(Number(currentClip?.edit_window_end))
+    && Number(currentClip?.edit_window_end) > proxyWindowStart)
+    ? Number(currentClip?.edit_window_end)
+    : proxyWindowStart + (videoRef.current?.duration || 0);
+
+  const sourceToMediaTime = (sourceSec: number, kindOverride?: MediaTimebase): number => {
+    const kind = kindOverride ?? mediaTimebase;
+    const mediaDur = videoRef.current?.duration || 0;
+    if (kind === 'proxy') {
+      try {
+        const r = sourceToProxy(roundMs(sourceSec) as SourceTime, roundMs(proxyWindowStart) as SourceTime, roundMs(proxyWindowEnd) as SourceTime, { clamp: true });
+        return r.kind === 'ok' ? r.time : r.clampedTime;
+      } catch {
+        return Math.max(0, sourceSec - proxyWindowStart);
+      }
+    }
+    if (kind === 'rendered') {
+      return Math.max(0, Math.min(mediaDur || Number.MAX_SAFE_INTEGER, sourceSec - clipStart));
+    }
+    return Math.max(0, sourceSec);
+  };
+
+  const mediaToSourceTime = (mediaSec: number, kindOverride?: MediaTimebase): number => {
+    const kind = kindOverride ?? mediaTimebase;
+    if (kind === 'proxy') {
+      try {
+        const r = proxyToSource(roundMs(mediaSec) as ProxyTime, roundMs(proxyWindowStart) as SourceTime, roundMs(proxyWindowEnd) as SourceTime, { clamp: true });
+        return r.kind === 'ok' ? r.time : r.clampedTime;
+      } catch {
+        return proxyWindowStart + mediaSec;
+      }
+    }
+    if (kind === 'rendered') return mediaSec + clipStart;
+    return mediaSec;
+  };
+
   const activeSourceTime = useMemo(() => {
     const v = videoRef.current;
     const start = Number(currentClip?.start_time || 0);
-    const end = Number(currentClip?.end_time || duration || 40);
     if (v) {
-      const isSource = Boolean(isSourceTimebase && v.duration >= (end - 1.0));
-      return isSource ? v.currentTime : v.currentTime + start;
+      return mediaToSourceTime(v.currentTime);
     }
     return currentTime + start;
-  }, [currentTime, isPlaying, isSourceTimebase, currentClip?.start_time, currentClip?.end_time, duration]);
+  }, [currentTime, isPlaying, mediaTimebase, proxyWindowStart, proxyWindowEnd, clipStart, currentClip?.start_time, currentClip?.end_time, duration]);
 
   // Immutable source-time origin the caption track is anchored to. start_time is
   // a mutable presentation boundary and must never become the caption anchor.
@@ -3039,24 +3097,26 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
-    // Check if the loaded video duration actually supports source timebase
-    const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
+    // Media timebase is authoritative from the loaded candidate (OQ1); no
+    // duration inference. Source-like media plays through the source-space EDL.
+    const effectiveSource = isSourceTimebase;
 
     if (video.paused) {
       if (effectiveSource) {
         const firstPieceStart = effectiveRanges[0][0];
         const lastPieceEnd = effectiveRanges[effectiveRanges.length - 1][1];
-        if (video.currentTime >= lastPieceEnd - 0.1 || video.currentTime < firstPieceStart - 0.2) {
-          video.currentTime = firstPieceStart;
-          if (bgVideoRef.current) bgVideoRef.current.currentTime = firstPieceStart;
+        const nowSrc = mediaToSourceTime(video.currentTime);
+        if (nowSrc >= lastPieceEnd - 0.1 || nowSrc < firstPieceStart - 0.2) {
+          video.currentTime = sourceToMediaTime(firstPieceStart);
+          if (bgVideoRef.current) bgVideoRef.current.currentTime = sourceToMediaTime(firstPieceStart);
         } else {
           // If resting inside a gap, jump to next piece start
           for (let i = 0; i < effectiveRanges.length - 1; i++) {
             const pieceEnd = effectiveRanges[i][1];
             const nextPieceStart = effectiveRanges[i + 1][0];
-            if (video.currentTime >= pieceEnd - 0.005 && video.currentTime < nextPieceStart) {
-              video.currentTime = nextPieceStart;
-              if (bgVideoRef.current) bgVideoRef.current.currentTime = nextPieceStart;
+            if (nowSrc >= pieceEnd - 0.005 && nowSrc < nextPieceStart) {
+              video.currentTime = sourceToMediaTime(nextPieceStart);
+              if (bgVideoRef.current) bgVideoRef.current.currentTime = sourceToMediaTime(nextPieceStart);
               break;
             }
           }
@@ -3113,7 +3173,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     lastTimeUpdateRef.current = safeTarget;
     setCurrentTime(safeTarget);
     const video = videoRef.current;
-    const effectiveSource = isSourceTimebase && Boolean(video && video.duration >= clipEnd - 1.0);
+    const effectiveSource = isSourceTimebase;
     let actualTarget: number;
     if (effectiveSource) {
       try {
@@ -3124,11 +3184,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     } else {
       actualTarget = safeTarget;
     }
+    const mediaTarget = effectiveSource ? sourceToMediaTime(actualTarget) : actualTarget;
     if (video) {
-      video.currentTime = actualTarget;
+      video.currentTime = mediaTarget;
     }
     if (bgVideoRef.current && layoutMode === 'fit_blur') {
-      bgVideoRef.current.currentTime = actualTarget;
+      bgVideoRef.current.currentTime = mediaTarget;
     }
   };
 
@@ -3202,12 +3263,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       return;
     }
 
-    const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
-    const timeOffset = isSourceTimeline ? 0 : clipStart;
-    const mediaStart = Math.max(0, range.start - timeOffset);
-    const mediaEnd = Math.min(video.duration || (clipEnd - clipStart), range.end - timeOffset);
-    const mediaCutStart = range.cutStart != null ? Math.max(0, range.cutStart - timeOffset) : undefined;
-    const mediaCutEnd = range.cutEnd != null ? Math.min(video.duration || (clipEnd - clipStart), range.cutEnd - timeOffset) : undefined;
+    const isSourceTimeline = isSourceTimebase;
+    const mediaDur = video.duration || (clipEnd - clipStart);
+    const mediaStart = sourceToMediaTime(range.start);
+    const mediaEnd = Math.min(mediaDur, sourceToMediaTime(range.end));
+    const mediaCutStart = range.cutStart != null ? sourceToMediaTime(range.cutStart) : undefined;
+    const mediaCutEnd = range.cutEnd != null ? Math.min(mediaDur, sourceToMediaTime(range.cutEnd)) : undefined;
 
     if (mediaEnd <= mediaStart) return;
 
@@ -3330,7 +3391,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           context.hasJumped = true;
           video.currentTime = context.cutEnd;
           if (bgVideoRef.current) bgVideoRef.current.currentTime = context.cutEnd;
-          setCurrentTime(clamp(context.cutEnd + (context.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
+          setCurrentTime(clamp(mediaToSourceTime(context.cutEnd) - clipStart, 0, clipDuration));
           return;
         }
       }
@@ -3338,17 +3399,15 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         handleStopPreviewContext();
         return;
       }
-      setCurrentTime(clamp(cur + (context.isSourceTimeline ? -clipStart : 0), 0, clipDuration));
+      setCurrentTime(clamp(mediaToSourceTime(cur) - clipStart, 0, clipDuration));
       return;
     }
 
     // 0ms Real-time Jump-Cut Auditioning during continuous playback in Auto-Cut drawer
     if (showAutoCutDrawer && isPlaying && !contextPreviewRef.current && autoCutProposals.length > 0) {
-      const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
-      const timeOffset = isSourceTimeline ? 0 : clipStart;
       for (const p of autoCutProposals) {
-        const pStart = Math.max(0, p.source_start - timeOffset);
-        const pEnd = Math.min(video.duration || clipDuration, p.source_end - timeOffset);
+        const pStart = sourceToMediaTime(p.source_start);
+        const pEnd = Math.min(video.duration || clipDuration, sourceToMediaTime(p.source_end));
         if (pEnd > pStart) {
           if (getEffectiveDecision(p) === 'cut') {
             if (cur >= pStart - 0.04 && cur < pEnd - 0.02) {
@@ -3362,7 +3421,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
                 if (bgVideoRef.current && layoutMode === 'fit_blur') {
                   bgVideoRef.current.currentTime = pEnd;
                 }
-                const newCurTime = clamp(pEnd + (isSourceTimeline ? -clipStart : 0), 0, clipDuration);
+                const newCurTime = clamp(mediaToSourceTime(pEnd) - clipStart, 0, clipDuration);
                 lastTimeUpdateRef.current = newCurTime;
                 setCurrentTime(newCurTime);
                 return;
@@ -3376,15 +3435,16 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
     }
 
-    const effectiveSource = isSourceTimebase && Boolean(video.duration >= clipEnd - 1.0);
+    const effectiveSource = isSourceTimebase;
 
     if (effectiveSource) {
       const firstPieceStart = effectiveRanges[0][0];
       const lastPieceEnd = effectiveRanges[effectiveRanges.length - 1][1];
+      const curSrc = mediaToSourceTime(cur);
 
       // Check if preview animation completed
       if (previewAnimRef.current?.active) {
-        const concatCur = sourceToConcat(effectiveRanges, cur, totalSourceDur);
+        const concatCur = sourceToConcat(effectiveRanges, curSrc, totalSourceDur);
         if (concatCur !== null && concatCur >= previewAnimRef.current.endTime) {
           const restore = previewAnimRef.current.restoreTime;
           previewAnimRef.current = null;
@@ -3397,12 +3457,12 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
 
       // 1. End-of-clip boundary: stop and reset to start of first piece
-      if (cur >= lastPieceEnd - 0.005) {
+      if (curSrc >= lastPieceEnd - 0.005) {
         video.pause();
-        video.currentTime = firstPieceStart;
+        video.currentTime = sourceToMediaTime(firstPieceStart);
         if (bgVideoRef.current) {
           bgVideoRef.current.pause();
-          bgVideoRef.current.currentTime = firstPieceStart;
+          bgVideoRef.current.currentTime = sourceToMediaTime(firstPieceStart);
         }
         setIsPlaying(false);
         lastTimeUpdateRef.current = 0;
@@ -3411,9 +3471,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
 
       // 2. Pre-clip underflow: reset to start of first piece
-      if (cur < firstPieceStart - 0.2) {
-        video.currentTime = firstPieceStart;
-        if (bgVideoRef.current) bgVideoRef.current.currentTime = firstPieceStart;
+      if (curSrc < firstPieceStart - 0.2) {
+        video.currentTime = sourceToMediaTime(firstPieceStart);
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = sourceToMediaTime(firstPieceStart);
         lastTimeUpdateRef.current = 0;
         setCurrentTime(0);
         return;
@@ -3424,10 +3484,10 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       for (let i = 0; i < effectiveRanges.length - 1; i++) {
         const pieceEnd = effectiveRanges[i][1];
         const nextPieceStart = effectiveRanges[i + 1][0];
-        if (cur >= pieceEnd - 0.005 && cur < nextPieceStart) {
-          video.currentTime = nextPieceStart;
+        if (curSrc >= pieceEnd - 0.005 && curSrc < nextPieceStart) {
+          video.currentTime = sourceToMediaTime(nextPieceStart);
           if (bgVideoRef.current && layoutMode === 'fit_blur') {
-            bgVideoRef.current.currentTime = nextPieceStart;
+            bgVideoRef.current.currentTime = sourceToMediaTime(nextPieceStart);
           }
           const nextConcat = sourceToConcat(effectiveRanges, nextPieceStart, totalSourceDur);
           if (nextConcat !== null) {
@@ -3441,7 +3501,7 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       if (jumpedGap) return;
 
       // 4. In-piece presentation time progression
-      const concatTime = sourceToConcat(effectiveRanges, cur, totalSourceDur);
+      const concatTime = sourceToConcat(effectiveRanges, curSrc, totalSourceDur);
       if (concatTime !== null) {
         if (showAutoCutDrawer || Math.abs(concatTime - lastTimeUpdateRef.current) >= 0.08 || concatTime <= 0.05) {
           lastTimeUpdateRef.current = concatTime;
@@ -3529,29 +3589,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [isPlaying, isSourceTimebase, clipStart, clipEnd, clipDuration, layoutMode]);
+  }, [isPlaying, mediaTimebase, proxyWindowStart, proxyWindowEnd, clipStart, clipEnd, clipDuration, layoutMode]);
 
-  const handleLoadedMetadata = (isSource?: boolean, mediaDuration?: number) => {
+  const handleLoadedMetadata = (isSource?: boolean, mediaDuration?: number, loadedKind?: MediaTimebase) => {
     const video = videoRef.current;
     const loadedDuration = Number.isFinite(mediaDuration) ? mediaDuration : video?.duration;
 
-    // Determine authoritative timebase from actual media duration vs clip timestamps:
-    // If loadedDuration is smaller than clipEnd - 1.0 (when clipEnd > clipDuration + 2.0),
-    // this media file cannot be the raw source; it is the rendered clip (0-based timebase).
-    let isSourceEffective = (typeof isSource === 'boolean') ? isSource : isSourceTimebase;
-    if (loadedDuration && Number.isFinite(loadedDuration)) {
-      if (clipEnd > clipDuration + 2.0 && loadedDuration < clipEnd - 1.0) {
-        isSourceEffective = false;
-      } else if (clipEnd > clipDuration + 2.0 && loadedDuration >= clipEnd - 1.0) {
-        isSourceEffective = true;
-      }
-    }
-    setIsSourceTimebase(isSourceEffective);
-    if (currentClip && isSourceEffective && loadedDuration && Number.isFinite(loadedDuration)) {
+    // Authoritative timebase: the stage reports WHICH candidate won (OQ1) —
+    // no duration inference against clip timestamps.
+    const kind: MediaTimebase = loadedKind ?? (typeof isSource === 'boolean' ? (isSource ? 'source' : 'rendered') : 'source');
+    setMediaTimebase(kind);
+    // Only the raw source media measures the true source duration; a window
+    // proxy measures the window, and a rendered output measures the clip.
+    if (kind === 'source' && currentClip && loadedDuration && Number.isFinite(loadedDuration)) {
       setSourceDurationForClip({ clipId: currentClip.id, seconds: loadedDuration });
     }
     if (video) {
-      if (video.videoWidth > 0 && video.videoHeight > 0 && isSourceEffective) {
+      if (video.videoWidth > 0 && video.videoHeight > 0 && kind !== 'rendered') {
         if (currentClip) {
           const isLandscape = video.videoWidth > video.videoHeight * 1.05;
           const newOrientation = isLandscape ? 'landscape' : 'portrait';
@@ -3564,14 +3618,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           }
         }
       }
-      if (isSourceEffective) {
-        if (video.duration >= clipStart && clipStart > 0) {
-          video.currentTime = clipStart;
-          if (bgVideoRef.current) bgVideoRef.current.currentTime = clipStart;
-        } else {
-          video.currentTime = 0;
-          if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
-        }
+      if (kind === 'source') {
+        const targetSource = (video.duration >= clipStart && clipStart > 0) ? clipStart : 0;
+        video.currentTime = targetSource;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = targetSource;
+      } else if (kind === 'proxy') {
+        const targetMedia = sourceToMediaTime(clipStart > 0 ? clipStart : 0, 'proxy');
+        video.currentTime = targetMedia;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = targetMedia;
       } else {
         video.currentTime = 0;
         if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
@@ -4533,10 +4587,12 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
     lastJumpedCutIdRef.current = null;
     const video = videoRef.current;
     if (!video) return;
-    const isSourceTimeline = Boolean(isSourceTimebase && video.duration >= (clipEnd - 1.0));
-    const targetMediaTime = isSourceTimeline
-      ? Math.max(0, Math.min(video.duration || (currentClip as any)?.source_duration || 3600, sourceSec))
-      : Math.max(0, Math.min(video.duration || clipDuration, sourceSec - clipStart));
+    // Proxy media must not clamp the SOURCE seek target to the proxy duration;
+    // sourceToMediaTime clamps into the staged window instead (OQ1).
+    const maxSource = mediaTimebase === 'rendered'
+      ? clipEnd
+      : (Number((currentClip as any)?.source_duration) || totalSourceDur);
+    const targetMediaTime = sourceToMediaTime(Math.max(0, Math.min(sourceSec, maxSource)));
 
     video.currentTime = targetMediaTime;
     if (bgVideoRef.current) bgVideoRef.current.currentTime = targetMediaTime;
@@ -4944,8 +5000,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
     if (success) {
       if (isSourceTimebase && videoRef.current) {
-        videoRef.current.currentTime = newStart;
-        if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = newStart;
+        const mediaSeek = sourceToMediaTime(newStart);
+        videoRef.current.currentTime = mediaSeek;
+        if (bgVideoRef.current && layoutMode === 'fit_blur') bgVideoRef.current.currentTime = mediaSeek;
       }
       if (isSourceTimebase) {
         lastTimeUpdateRef.current = 0;
@@ -6993,8 +7050,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     mediaElementRef={videoRef}
                     clipStart={currentClip.start_time}
                     clipEnd={currentClip.end_time}
-                    paddedStart={currentClip.padded_start}
-                    paddedEnd={currentClip.padded_end}
+                    paddedStart={currentClip.edit_window_start ?? currentClip.padded_start}
+                    paddedEnd={currentClip.edit_window_end ?? currentClip.padded_end}
                     onTrimChange={handleTrimChange}
                     onPreviewContext={handlePreviewContext}
                     onSeek={handleSeek}
@@ -7027,9 +7084,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                     const targetIndex = (selectedPieceIndex !== null && selectedPieceIndex !== undefined)
                       ? selectedPieceIndex
                       : activeSegments.findIndex((s) => {
-                          const t = isSourceTimebase
-                            ? (videoRef.current ? videoRef.current.currentTime : currentTime)
-                            : currentTime;
+                          const t = mediaTimebase === 'rendered'
+                            ? currentTime
+                            : mediaToSourceTime(videoRef.current ? videoRef.current.currentTime : 0);
                           return t >= s.start && t <= s.end;
                         });
                     if (targetIndex >= 0) {
@@ -7085,9 +7142,9 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                   const targetIndex = (selectedPieceIndex !== null && selectedPieceIndex !== undefined)
                     ? selectedPieceIndex
                     : activeSegments.findIndex((s) => {
-                        const t = isSourceTimebase
-                          ? (videoRef.current ? videoRef.current.currentTime : currentTime)
-                          : currentTime;
+                        const t = mediaTimebase === 'rendered'
+                          ? currentTime
+                          : mediaToSourceTime(videoRef.current ? videoRef.current.currentTime : 0);
                         return t >= s.start && t <= s.end;
                       });
                   if (targetIndex >= 0) {

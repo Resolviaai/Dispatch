@@ -527,6 +527,33 @@ class AndroidClipRenderer(
             return if (segmentSpans.isNotEmpty()) segmentSpans.first().first / 1000f else 0f
         }
 
+        /**
+         * Shifts source-relative segment spans into media space when the staged
+         * file is an edit-window proxy (media t=0 == window_start). Spans that
+         * fall entirely outside the window are dropped; clamping applies at the
+         * window edges. Throws when nothing survives — rendering the unshifted
+         * spans would cut the wrong footage silently.
+         */
+        fun shiftSegmentSpansToMediaSpace(
+            segmentSpans: List<Pair<Long, Long>>,
+            windowStartSec: Float,
+            mediaDurationMs: Long?
+        ): List<Pair<Long, Long>> {
+            val windowStartMs = (windowStartSec * 1000f).roundToInt().toLong()
+            val maxMs = mediaDurationMs ?: Long.MAX_VALUE
+            val shifted = segmentSpans.mapNotNull { (sMs, eMs) ->
+                val ps = (sMs - windowStartMs).coerceIn(0L, maxMs)
+                val pe = (eMs - windowStartMs).coerceIn(0L, maxMs)
+                if (pe - ps > 0L) Pair(ps, pe) else null
+            }
+            if (shifted.isEmpty()) {
+                throw IllegalStateException(
+                    "Staged edit window at ${windowStartSec}s does not overlap clip segments; re-sync the clip from the PC"
+                )
+            }
+            return shifted
+        }
+
         private fun normalizeBackgroundMode(rawMode: String?): String {
             return when (rawMode?.trim()?.lowercase(Locale.ROOT)) {
                 "line", "per_line" -> "line"
@@ -878,7 +905,11 @@ class AndroidClipRenderer(
         val thumbnailFile: File? = null,
         val targetResolution: String = "1080p", // "1080p" or "720p"
         val layoutMode: String = "portrait_9_16",
-        val cropAnchorX: Float = 0.5f
+        val cropAnchorX: Float = 0.5f,
+        /** Non-null when the staged media is an edit-window proxy: media t=0
+         *  sits at this SOURCE second, so doc segments (source-relative) must
+         *  be shifted into media space before clipping. */
+        val sourceWindowStartSec: Float? = null
     )
 
     interface RenderCallback {
@@ -889,6 +920,7 @@ class AndroidClipRenderer(
 
     suspend fun renderClip(
         job: com.resolvia.dispatch.data.RenderJobEntity,
+        stagedSourceWindowStartSec: Float? = null,
         onProgress: (Int) -> Unit
     ): RenderOutcome = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
         val req = RenderRequest(
@@ -901,7 +933,8 @@ class AndroidClipRenderer(
             thumbnailFile = job.thumbnailPath?.let { File(it) },
             targetResolution = job.targetResolution,
             layoutMode = job.layoutMode,
-            cropAnchorX = job.cropAnchorX
+            cropAnchorX = job.cropAnchorX,
+            sourceWindowStartSec = stagedSourceWindowStartSec
         )
 
         startRender(req, object : RenderCallback {
@@ -976,6 +1009,16 @@ class AndroidClipRenderer(
                 val totalMs = durStr?.toLongOrNull() ?: 10_000L
                 segmentSpans.add(Pair(0L, totalMs))
             }
+
+            // Staged media may be the R2 edit-window proxy (media t=0 ==
+            // window_start). Doc segments are SOURCE-relative; shift them into
+            // media space for clipping. Caption remap stays in source space —
+            // the proxy is a contiguous real-time excerpt, so span durations
+            // (and the concat timeline they produce) are unchanged.
+            val mediaDurationMs = durStr?.toLongOrNull()
+            val mediaSpans: List<Pair<Long, Long>> = request.sourceWindowStartSec?.let {
+                shiftSegmentSpansToMediaSpace(segmentSpans, it, mediaDurationMs)
+            } ?: segmentSpans
 
             // 2. Parse Caption & Static Text/Overlay Tracks and remap EVERY EDL (1-piece & multi-piece)
             val rawOverlayGroups = parseOverlayGroups(docObj)
@@ -1233,7 +1276,7 @@ class AndroidClipRenderer(
             val fgItemEffects = Effects(ImmutableList.of(), fgEffectsBuilder.build())
 
             val fgItems = mutableListOf<EditedMediaItem>()
-            for ((startMs, endMs) in segmentSpans) {
+            for ((startMs, endMs) in mediaSpans) {
                 val clipConfig = ClippingConfiguration.Builder()
                     .setStartPositionMs(startMs)
                     .setEndPositionMs(endMs)
@@ -1271,7 +1314,7 @@ class AndroidClipRenderer(
                     )
                 )
                 val bgItems = mutableListOf<EditedMediaItem>()
-                for ((startMs, endMs) in segmentSpans) {
+                for ((startMs, endMs) in mediaSpans) {
                     val clipConfig = ClippingConfiguration.Builder()
                         .setStartPositionMs(startMs)
                         .setEndPositionMs(endMs)

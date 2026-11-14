@@ -439,6 +439,45 @@ class AndroidClipRendererTest {
     }
 
     @Test
+    fun shiftSegmentSpansToMediaSpace_shiftsClampsAndDropsOutOfWindowSpans() {
+        // Window proxy anchored at source 120s, media duration 20s.
+        val shifted = AndroidClipRenderer.shiftSegmentSpansToMediaSpace(
+            segmentSpans = listOf(Pair(130000L, 140000L), Pair(110000L, 125000L), Pair(50000L, 60000L)),
+            windowStartSec = 120.0f,
+            mediaDurationMs = 20000L
+        )
+        // Fully inside: shifted by exactly the window origin.
+        assertEquals(Pair(10000L, 20000L), shifted[0])
+        // Partially before the window: clamped to the media start.
+        assertEquals(Pair(0L, 5000L), shifted[1])
+        // Entirely before the window: dropped.
+        assertEquals(2, shifted.size)
+    }
+
+    @Test
+    fun shiftSegmentSpansToMediaSpace_clampsToMediaDurationAndThrowsOnNoOverlap() {
+        // Span extends beyond the proxy tail: clamped to the media duration.
+        val clamped = AndroidClipRenderer.shiftSegmentSpansToMediaSpace(
+            segmentSpans = listOf(Pair(130000L, 400000L)),
+            windowStartSec = 120.0f,
+            mediaDurationMs = 15000L
+        )
+        assertEquals(Pair(10000L, 15000L), clamped[0])
+
+        // Nothing overlaps the window: hard failure instead of cutting wrong footage.
+        try {
+            AndroidClipRenderer.shiftSegmentSpansToMediaSpace(
+                segmentSpans = listOf(Pair(50000L, 60000L)),
+                windowStartSec = 120.0f,
+                mediaDurationMs = 20000L
+            )
+            throw AssertionError("Expected IllegalStateException for non-overlapping window")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("does not overlap"))
+        }
+    }
+
+    @Test
     fun parseOverlayGroups_matchesPythonFrontendPresetDefaultsAndNoneAnimationScale() {
         val json = """
         {

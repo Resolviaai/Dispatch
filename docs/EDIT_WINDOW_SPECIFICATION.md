@@ -225,8 +225,11 @@ expired : reserved by schema, never written by current code (Open Question 4)
 ## 11. Open Questions for External Review
 
 > The owner deferred these decisions ("I don't know what to do") for verification with another model. Each records **current locked behavior**, the alternatives, and the trade-offs. Nothing below is settled; everything above is.
+>
+> **DECIDED — external review, 2026-11-14:** the review confirmed the core architecture (3-way entity separation, quota kernel, source-relative `window_transcripts.words` at rest). **Option A is approved for all seven OQs.** OQ2–OQ5 lock current behavior with zero code changes; OQ1 + OQ6 + OQ7 proceed as one implementation pass: `edit_windows.window_start/end` becomes the sole window anchor, the clients adopt `TimelineMapper` for proxy↔source parity, and the Worker's contract copy is pinned to stop drift.
 
 ### OQ1 — Cloud-mode timebase parity (phone & Android ignore `edit_window_start/end`)
+- **DECISION (2026-11-14): Option A approved — to implement.**
 - **Current:** Worker hydrates `edit_window_start/end` into `GET /clips` and `/source-url` ([index.ts:5339](file:///c:/CODE/Dispatch/cloud-worker/src/index.ts#L5339), [6615](file:///c:/CODE/Dispatch/cloud-worker/src/index.ts#L6615)) but no client consumes them. The phone treats the window proxy as source timebase and infers timebase by duration heuristics; Android downloads `source_url` and applies no offset.
 - **Consequence:** for clips whose window does **not** start near source 0:00 (common once `start_time > 60 s`), proxy-relative playback/ruler/trim coordinates differ from source coordinates by `window_start`. Caption seeds are shifted to window-relative by the Worker, so captions align with the proxy video, but clip-relative operations (trim windows, export ranges, `ai_suggested_*` comparisons) are computed in the other space.
 - **Option A (recommended):** lock client-side parity — phone and Android honor `edit_window_start/end` (subtract on ingest, add on publish), making `TimelineMapper` the shared contract instead of duration heuristics.
@@ -234,36 +237,43 @@ expired : reserved by schema, never written by current code (Open Question 4)
 - **Trade-off:** A fixes the drift class permanently but touches every trim/scrub site (seven known timebase heuristics); B keeps clients simple but adds a translation burden to every new Worker field.
 
 ### OQ2 — Cloud staging transcription policy (cached words only vs fresh Stage-2)
+- **DECISION (2026-11-14): Option A approved — locked as-is.** Cached-only transcription stays; zero code changes.
 - **Current (locked, tested):** staging never calls Gemini on the cloud path; words come from the clip's cached caption track filtered to the window; empty → `transcript_status='missing'`, window still ready ([sync.py:981](file:///c:/CODE/Dispatch/dispatch/cloud/sync.py#L981), contract test in [test_edit_windows.py](file:///c:/CODE/Dispatch/tests/test_edit_windows.py)).
 - **Option A (recommended):** keep cached-only. Zero surprise Gemini spend; `missing` windows are still fully editable video, and the PC fills words later via gap transcription when it comes online.
 - **Option B:** fresh Stage-2 on missing coverage (the plumbing exists: audio extract + `MAX_WINDOW_TRANSCRIBE_SECONDS=300`). Cost: one transcription per window without cached words; benefit: captions immediately editable on phone for clips whose PC transcript didn't cover the window.
 - **Trade-off:** B improves first-session mobile UX at the price of unbounded per-user Gemini spend triggered by staging, which today is a background side effect rather than an explicit user action.
 
 ### OQ3 — Android render source policy (proxy-preferred vs raw-when-reachable)
+- **DECISION (2026-11-14): Option A approved — locked as-is.** Proxy-preferred rendering stays; zero code changes.
 - **Current (locked):** `/source-url` prefers `edit_window` → `clip_video`; Android renders from the staged 720p proxy when present.
 - **Option A (recommended):** keep proxy-preferred. Guaranteed availability with PC off; 720p30 is acceptable for Shorts output; predictable quota (~100 MB per window).
 - **Option B:** prefer `clip_video` (raw) when reachable, proxy fallback. Higher output fidelity for 4K sources, but Android render quality then depends on the PC being on, and full raw sources consume 512 MiB-cap quota instead of ~100 MB windows.
 - **Trade-off:** this is a quality-vs-availability decision; A is the only option that keeps "PC off" a first-class mode.
 
 ### OQ4 — Window lifecycle (manual reclamation only vs TTL expiry)
+- **DECISION (2026-11-14): Option A approved — locked as-is.** Manual reclamation stays; `expired` remains reserved schema; zero code changes.
 - **Current (locked):** no time-based expiry. `status='expired'` is dead schema; superseded proxies are reclaimed at re-registration; quota is enforced by caps, not age.
 - **Option A (recommended):** keep manual reclamation; document `expired` as reserved. Simplest, matches current behavior, no sweeps.
 - **Option B:** TTL (e.g. 7 days) with a Worker scheduled sweep marking windows expired and reclaiming R2 bytes. Frees quota from abandoned windows automatically but risks deleting a window the user still expects (presigned URL dies mid-edit), and adds a cron surface.
 - **Trade-off:** quota pressure vs surprise eviction. The quota kernel (0032 caps + per-user 2 GB) currently caps the blast radius at ~4–6 windows.
 
 ### OQ5 — "Load More" beyond 300 s (backend-ready, product-absent)
+- **DECISION (2026-11-14): Option A approved — documented V1 non-goal.** "Load More" beyond the 300 s staged window is out of scope for V1; `compute_extension_window` and `uncovered_ranges` remain the pure-function contract for a future "extend window" action. No UI and no Worker route will invoke them in V1.
 - **Current:** `compute_extension_window` (zero-context window around an explicit request) and `uncovered_ranges` (deterministic extension transcription) exist and are unit-tested ([edit_windows.py:75](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L75), [95](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L95)), but no UI and no Worker route invoke them.
 - **Option A (recommended):** document as a V1 non-goal; keep the pure functions as the contract for a future "extend window" action.
 - **Option B:** specify the UX now (chip affordance → `compute_extension_window` → re-stage with partial word re-transcription via `uncovered_ranges`).
 - **Trade-off:** B completes the owner brief's "Load More" story but adds a staging round-trip + potential Gemini spend to the mobile flow before the base flow's parity questions (OQ1) are settled.
 
 ### OQ6 — Two window-origin anchors (`edit_windows.window_start` vs `padded_start = start_time − 4`)
+- **DECISION (2026-11-14): Option A approved — to implement.** `edit_windows.window_start/end` becomes the single anchor; the padded display is recomputed from it (or retired).
+- **IMPLEMENTED (2026-11-14, retire branch):** the chip band now prefers the resolved `edit_window_start/end` (PC `_populate_edit_window_bounds` and Worker hydration both already serve them) and falls back to `padded_start/end` only for legacy clips with no window. Padded bounds are NOT retroactively rewritten: they are load-bearing as the ±4s precision margin in Stage-2 drain ([gemini_engine.py:1189](file:///c:/CODE/Dispatch/dispatch/transcription/gemini_engine.py#L1189)), render slice resolution ([ai_clips/worker.py:541](file:///c:/CODE/Dispatch/dispatch/ai_clips/worker.py#L541)), and the window-relative caption anchor ([video_engine/renderer.py:133](file:///c:/CODE/Dispatch/dispatch/video_engine/renderer.py#L133)); rewriting them would silently widen those slices and shift caption anchors. The single anchor for window semantics is `edit_windows.window_start`; `padded_*` remains a legacy pre-window display margin.
 - **Current:** registration derives bounds via `compute_window` (±60 s context); the UI chip displays the legacy **padded** bounds; `_resolve_edit_window_bounds` falls back padded→computed; Worker seeds use `edit_windows.window_start`.
 - **Option A (recommended):** unify on `edit_windows.window_start` as the single anchor; recompute `padded_start/end` from it (or retire the chip's padded display) so the UI shows the real staged span.
 - **Option B:** keep dual anchors and document the mapping.
 - **Trade-off:** A is one source of truth but requires migrating clips whose only stored bounds are padded; B preserves compatibility at the cost of permanent two-anchor drift risk.
 
 ### OQ7 — Adopt or archive `TimelineMapper`
+- **DECISION (2026-11-14): Option A approved — to implement.** `TimelineMapper` is adopted at the OQ1 parity fix; the Worker's `timelineContract.ts` copy is version-pinned (or import-shared) to the canonical contract.
 - **Current:** the Wave 2A branded cross-runtime mapper (SOURCE/PROXY/CONCAT, RFC-8785 fingerprints) is fully specified, tested, and imported by nothing in production; the cloud-worker keeps a separate `timelineContract.ts` copy.
 - **Option A (recommended):** adopt it at the OQ1 parity fix — replace the seven duration heuristics with `TimelineMapper` conversions, and make the Worker's copy import-shared (or version-pinned) to stop contract drift.
 - **Option B:** archive it (delete) until a runtime actually needs branded coordinates.

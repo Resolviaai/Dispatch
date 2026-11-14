@@ -340,6 +340,8 @@ class RenderForegroundService : LifecycleService() {
                 val clipIdFromName = when {
                     fileName.endsWith(".mp4.tmp") -> fileName.removeSuffix(".mp4.tmp")
                     fileName.endsWith(".mp4") -> fileName.removeSuffix(".mp4")
+                    // Window-origin sidecar lives and dies with its staged mp4.
+                    fileName.endsWith(".window.json") -> fileName.removeSuffix(".window.json")
                     else -> null
                 }
 
@@ -600,6 +602,7 @@ class RenderForegroundService : LifecycleService() {
         try {
             // 1. Verify source video exists; if missing locally, stage from Cloud Worker using valid Worker JWT
             var currentJob = job
+            var stagedWindowStartSec: Float? = null
             val sourceFile = File(currentJob.sourceVideoPath)
             if (!sourceFile.exists() || sourceFile.length() == 0L) {
                 updateNotification("Staging source video from cloud...", 0)
@@ -607,12 +610,16 @@ class RenderForegroundService : LifecycleService() {
                 val token = resolveWorkerJwt(pairing.cloudAccessToken)
                     ?: throw IllegalStateException("Cloud sign-in required to stage source video for clip ${currentJob.clipId}")
                 val staged = stageSourceVideo(currentJob.clipId, token)
-                if (staged != null && staged.exists() && staged.length() > 0L) {
-                    currentJob = currentJob.copy(sourceVideoPath = staged.absolutePath)
+                if (staged != null && staged.file.exists() && staged.file.length() > 0L) {
+                    currentJob = currentJob.copy(sourceVideoPath = staged.file.absolutePath)
                     dao.updateRenderJob(currentJob)
+                    stagedWindowStartSec = staged.windowStartSec
                 } else {
                     throw IllegalStateException("Source video file not found locally or in cloud for clip ${currentJob.clipId}")
                 }
+            } else {
+                // Resumed job: recover the media-time origin recorded at staging time.
+                stagedWindowStartSec = readStagedWindowStartSec(currentJob.clipId)
             }
 
             dao.updateRenderJobProgress(
@@ -625,6 +632,7 @@ class RenderForegroundService : LifecycleService() {
             val renderer = AndroidClipRenderer(applicationContext, jobScope)
             val outcome = renderer.renderClip(
                 job = currentJob,
+                stagedSourceWindowStartSec = stagedWindowStartSec,
                 onProgress = { progressPercent: Int ->
                     val now = System.currentTimeMillis()
                     if (now - lastProgressNotificationMs > 250 || progressPercent == 100) {
@@ -916,7 +924,26 @@ class RenderForegroundService : LifecycleService() {
         }
     }
 
-    private fun stageSourceVideo(clipId: String, token: String): File? {
+    /** Staged media plus the origin of its media-time axis. Non-null
+     *  windowStartSec means the file is an edit-window proxy whose t=0 sits at
+     *  that SOURCE second; render spans must be shifted by it. */
+    data class StagedSource(
+        val file: File,
+        val windowStartSec: Float?,
+        val windowEndSec: Float?
+    )
+
+    private fun JsonObject.optFloat(key: String): Float? {
+        val el = get(key) ?: return null
+        if (el.isJsonNull) return null
+        return try {
+            el.asDouble.toFloat()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun stageSourceVideo(clipId: String, token: String): StagedSource? {
         val workerUrl = "https://dispatch-cloud.resolviaai.workers.dev"
         val client = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -936,10 +963,23 @@ class RenderForegroundService : LifecycleService() {
                 val bodyStr = resp.body?.string() ?: return null
                 val json = gson.fromJson(bodyStr, JsonObject::class.java)
                 val sourceUrl = json.get("source_url")?.asString ?: return null
+                // The origin must travel with the SERVED media: only an
+                // edit_window proxy is window-relative (media t=0 == window
+                // start); clip_video is the raw source (origin 0).
+                val mediaKind = json.get("media_kind")?.takeIf { !it.isJsonNull }?.asString
+                val responseWindowStart = json.optFloat("edit_window_start")
+                val responseWindowEnd = json.optFloat("edit_window_end")
+                val windowStartSec = if (mediaKind == "edit_window") responseWindowStart else {
+                    if (responseWindowStart != null && mediaKind == null) {
+                        android.util.Log.w("RenderForeground", "Worker response lacks media_kind; treating staged media as raw source for clip $clipId")
+                    }
+                    null
+                }
 
                 val cacheVideosDir = File(applicationContext.cacheDir, "source_videos").apply { mkdirs() }
                 val targetFile = File(cacheVideosDir, "${clipId}.mp4")
                 val tempFile = File(cacheVideosDir, "${clipId}.mp4.tmp")
+                val sidecarFile = File(cacheVideosDir, "${clipId}.window.json")
                 if (tempFile.exists()) tempFile.delete()
 
                 val dlReq = Request.Builder().url(sourceUrl).get().build()
@@ -953,7 +993,25 @@ class RenderForegroundService : LifecycleService() {
                 if (tempFile.exists() && tempFile.length() > 0L) {
                     if (targetFile.exists()) targetFile.delete()
                     if (tempFile.renameTo(targetFile) && targetFile.exists() && targetFile.length() > 0L) {
-                        targetFile
+                        // Persist the media-time origin next to the staged file so
+                        // resumed jobs (file already staged) keep the pairing.
+                        if (windowStartSec != null) {
+                            try {
+                                sidecarFile.writeText(
+                                    gson.toJson(
+                                        mapOf(
+                                            "window_start" to windowStartSec,
+                                            "window_end" to responseWindowEnd
+                                        )
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.w("RenderForeground", "Failed to write window sidecar for clip $clipId: ${e.message}")
+                            }
+                        } else if (sidecarFile.exists()) {
+                            sidecarFile.delete()
+                        }
+                        StagedSource(targetFile, windowStartSec, if (windowStartSec != null) responseWindowEnd else null)
                     } else {
                         tempFile.delete()
                         null
@@ -965,6 +1023,18 @@ class RenderForegroundService : LifecycleService() {
             }
         } catch (e: Exception) {
             android.util.Log.e("RenderForeground", "Failed to stage source video for clip $clipId: ${e.message}")
+            null
+        }
+    }
+
+    private fun readStagedWindowStartSec(clipId: String): Float? {
+        val sidecarFile = File(File(applicationContext.cacheDir, "source_videos"), "${clipId}.window.json")
+        if (!sidecarFile.exists()) return null
+        return try {
+            val json = Gson().fromJson(sidecarFile.readText(), JsonObject::class.java)
+            json.optFloat("window_start")
+        } catch (e: Exception) {
+            android.util.Log.w("RenderForeground", "Failed to read window sidecar for clip $clipId: ${e.message}")
             null
         }
     }

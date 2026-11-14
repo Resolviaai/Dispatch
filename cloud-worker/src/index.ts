@@ -6616,6 +6616,11 @@ export default {
             ok: true,
             clip_id: localClipId,
             media_object_id: mediaObj.id,
+            // Which media the presigned URL serves: edit_window proxies are
+            // window-relative (media t=0 == edit_window_start); clip_video is
+            // the raw source (origin 0). Clients must pair the origin with the
+            // served kind, never with edit_windows state alone.
+            media_kind: mediaObj.kind ?? null,
             source_url: presignedGet,
             byte_count: mediaObj.byte_count,
             mime_type: mediaObj.mime_type,
