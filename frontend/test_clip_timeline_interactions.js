@@ -22,15 +22,15 @@ const extendedStart = moveTrimPointer(startDrag, 7, 80, 2, 600);
 assert.deepEqual(extendedStart, { start: 60, end: 150 }, 'start drag can extend beyond Gemini range');
 assert.deepEqual(moveTrimPointer(startDrag, 8, 80, 2, 600), suggested, 'an unrelated pointer cannot move the active trim');
 
-// End drag clamps against source duration and the 180-second product maximum.
+// End drag clamps against source duration only; the 3-minute product cap is gone.
 const endDrag = beginTrimPointer('end', 9, 10, extendedStart);
-assert.deepEqual(moveTrimPointer(endDrag, 9, 1000, 2, 600), { start: 60, end: 240 });
+assert.deepEqual(moveTrimPointer(endDrag, 9, 1000, 2, 600), { start: 60, end: 600 });
 const nearEof = beginTrimPointer('end', 10, 0, { start: 570, end: 590 });
 assert.deepEqual(moveTrimPointer(nearEof, 10, 500, 10, 600), { start: 570, end: 600 }, 'end drag clamps at source EOF');
-const maxLength = beginTrimPointer('start', 11, 0, { start: 220, end: 390 });
-assert.deepEqual(moveTrimPointer(maxLength, 11, -500, 10, 1000), { start: 210, end: 390 }, 'start drag preserves the 180-second limit');
+const longForm = beginTrimPointer('start', 11, 0, { start: 220, end: 390 });
+assert.deepEqual(moveTrimPointer(longForm, 11, -500, 10, 1000), { start: 170, end: 390 }, 'start drag expands freely up to the source bound');
 assert.deepEqual(extendSourceRange(suggested, 'start', -0.5, 600), { start: 119.5, end: 150 }, 'accessible extension uses the same source-bound range logic');
-assert.deepEqual(extendSourceRange({ start: 0, end: 179.8 }, 'end', 0.5, 600), { start: 0, end: 180 }, 'accessible extension obeys the 180-second limit');
+assert.deepEqual(extendSourceRange({ start: 0, end: 179.8 }, 'end', 0.5, 600), { start: 0, end: 180.3 }, 'accessible extension allows long-form expansion');
 assert.deepEqual(sourceContextRange({ start: 1, end: 598 }, 'before', 600), { start: 0, end: 1 }, 'context preview clamps at source start');
 assert.deepEqual(sourceContextRange({ start: 1, end: 598 }, 'after', 600), { start: 598, end: 600 }, 'context preview clamps at source end');
 

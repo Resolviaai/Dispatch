@@ -78,7 +78,7 @@ The three pillars, kept strictly separate ([edit_windows.py:1-19](file:///c:/COD
 | --- | --- | --- |
 | `MAX_WINDOW_SECONDS` | `300.0` | [edit_windows.py:33](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L33) |
 | `CONTEXT_SECONDS` (initial window) | `60.0` before/after selection | [edit_windows.py:34](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L34) |
-| `MIN_SELECTION_SECONDS` / `MAX_SELECTION_SECONDS` | `5.0` / `180.0` (final-clip product limit) | [edit_windows.py:35](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L35) |
+| `MIN_SELECTION_SECONDS` | `5.0` (final-clip product floor; the former 180 s selection cap was removed 2026-11-14 — `MAX_CLIP_DURATION` 3600 s is the only hard ceiling) | [edit_windows.py:34](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L34), [config.py:88](file:///c:/CODE/Dispatch/dispatch/config.py#L88) |
 | `MAX_WINDOW_TRANSCRIBE_SECONDS` | `300.0` (separate from `MAX_CLIP_DURATION`) | [edit_windows.py:40](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L40) |
 | Proxy geometry | `1280x720` or `720x1280` (orientation-following), `30` fps, `2500k` video + `128k` AAC, `+faststart` | [edit_windows.py:42](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L42), [build_proxy_cmd](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L215) |
 | Proxy validation | duration within ±1.0 s of requested span; aspect delta ≤ 0.06 vs source; missing audio rejected | `ffprobe_validate_proxy` (call site [edit_windows.py:303](file:///c:/CODE/Dispatch/dispatch/edit_windows.py#L303)) |

@@ -256,8 +256,8 @@ export function validateTimelineSegments(segments: unknown): {
   if (total < 5.0) {
     return { valid: false, error: `total kept duration (${total}s) must be at least 5.0s`, keptDuration: total };
   }
-  if (total > 180.0) {
-    return { valid: false, error: `total kept duration (${total}s) exceeds 180.0s maximum`, keptDuration: total };
+  if (total > 3600.0) {
+    return { valid: false, error: `total kept duration (${total}s) exceeds 3600.0s maximum`, keptDuration: total };
   }
   return { valid: true, keptDuration: total, canonicalSegments };
 }

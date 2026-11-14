@@ -33,7 +33,8 @@ class TestWindowMath(unittest.TestCase):
         self.assertIsNotNone(ew.validate_selection(0, 4.9))
         self.assertIsNone(ew.validate_selection(0, 5.0))
         self.assertIsNone(ew.validate_selection(10, 190))
-        self.assertIsNotNone(ew.validate_selection(0, 180.1))
+        self.assertIsNone(ew.validate_selection(0, 180.1))
+        self.assertIsNone(ew.validate_selection(0, 3600.0))
 
 
 class TestWindowReuse(unittest.TestCase):
@@ -83,7 +84,7 @@ class TestStage2Separation(unittest.TestCase):
         import inspect
         from dispatch.transcription import gemini_engine
         src = inspect.getsource(gemini_engine.transcribe_stage2_precision_words)
-        self.assertIn("max_input_seconds if max_input_seconds else MAX_CLIP_DURATION + 16.0", src)
+        self.assertIn("max_input_seconds if max_input_seconds else MAX_SUGGESTED_CLIP_DURATION + 16.0", src)
 
 
 class TestProxyVerification(unittest.TestCase):

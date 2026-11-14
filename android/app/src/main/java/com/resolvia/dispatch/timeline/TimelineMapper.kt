@@ -152,7 +152,7 @@ object TimelineMapper {
     const val CANONICALIZER_VERSION = "rfc8785-v1"
     const val MIN_PIECE_DURATION = 0.1
     const val MIN_TOTAL_DURATION = 5.0
-    const val MAX_TOTAL_DURATION = 180.0
+    const val MAX_TOTAL_DURATION = 3600.0
     private const val TIME_EPSILON = 1e-9
 
     fun roundMs(seconds: Double): Double {

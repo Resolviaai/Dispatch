@@ -23,7 +23,7 @@ export interface EdlV1 {
 
 export const MIN_PIECE_DURATION = 0.1;
 export const MIN_TOTAL_DURATION = 5.0;
-export const MAX_TOTAL_DURATION = 180.0;
+export const MAX_TOTAL_DURATION = 3600.0;
 export const SOURCE_BOUNDS_EPSILON = 0.01;
 const TIME_EPSILON = 1e-9;
 const EDL_VERSION = 1 as const;

@@ -65,9 +65,9 @@ console.log('Test 1: read-only mappers skip total-duration enforcement...');
 
   // Mutation validators still enforce the total-duration contract.
   assert.throws(() => normalizeRanges([[10, 13]], 600), TimelineError, 'normalizeRanges still rejects <5s totals');
-  assert.throws(() => normalizeRanges([[0, 200]], 200), TimelineError, 'normalizeRanges still rejects >180s totals');
+  assert.equal(normalizeRanges([[0, 200]], 200).length, 1, 'normalizeRanges accepts >180s long-form totals');
   assert.throws(() => splitAt([[0, 3]], 1.5, 600), TimelineError, 'splitAt still enforces the total contract');
-  console.log('  ✓ read-only mappings work for <5s and >180s kept timelines; mutations still enforce');
+  console.log('  ✓ read-only mappings work for <5s and >180s kept timelines; mutations still enforce the 5s floor');
 }
 
 // ---------------------------------------------------------------------------

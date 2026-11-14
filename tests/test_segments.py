@@ -72,6 +72,15 @@ class SegmentTimelineTests(unittest.TestCase):
         self.assertEqual(len(result), case["expected_count"])
         self.assertAlmostEqual(kept_duration(result), case["expected_duration"], places=8)
 
+    def test_long_form_totals_above_180s_are_accepted(self):
+        ranges = [(0.0, 120.0), (200.0, 400.0)]
+        result = normalize_ranges(ranges, 600.0)
+        self.assertAlmostEqual(kept_duration(result), 320.0, places=8)
+
+    def test_below_minimum_total_is_still_rejected(self):
+        with self.assertRaises(SegmentError):
+            normalize_ranges([(0.0, 3.0)], 600.0)
+
     def test_shared_point_mapping_fixtures(self):
         case = self.fixtures["cases"]["point_mapping"]
         for item in case["source_to_concat"]:

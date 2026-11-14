@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import requests
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from dispatch.config import GEMINI_API_KEY, MIN_CLIP_DURATION, MAX_CLIP_DURATION
+from dispatch.config import GEMINI_API_KEY, MIN_CLIP_DURATION, MAX_SUGGESTED_CLIP_DURATION
 import math
 from dispatch.ai_clips.prompt_templates import (
     HIGHLIGHT_SYSTEM_PROMPT,
@@ -370,7 +370,7 @@ def apply_sarcasm_and_irony_lookahead(
     """Scan window immediately following candidate end_t for sarcasm/irony retraction markers.
 
     If a bold/outrageous statement is retracted ('just kidding', 'mazak tha'), we must either:
-    1. Extend end_t to incorporate the retraction and its resolution clause (if <= MAX_CLIP_DURATION).
+    1. Extend end_t to incorporate the retraction and its resolution clause (if <= MAX_SUGGESTED_CLIP_DURATION).
     2. Reject the candidate (return is_safe=False) if extending would exceed maximum allowable clip duration,
        preventing viral misinformation and misleading out-of-context clips.
     """
@@ -398,7 +398,7 @@ def apply_sarcasm_and_irony_lookahead(
             ]
             if matching_segs:
                 new_end = min(total_duration, float(matching_segs[0].get("end", end_t)) + 0.25)
-                if (new_end - start_t) <= MAX_CLIP_DURATION:
+                if (new_end - start_t) <= MAX_SUGGESTED_CLIP_DURATION:
                     return start_t, new_end, True
                 return start_t, end_t, False
         return start_t, end_t, True
@@ -430,13 +430,13 @@ def apply_sarcasm_and_irony_lookahead(
     retraction_end_t = float(subsequent_words[clause_end_idx].get("end", end_t))
     extended_end = min(total_duration, round(retraction_end_t + 0.25, 2))
 
-    if (extended_end - start_t) <= MAX_CLIP_DURATION:
+    if (extended_end - start_t) <= MAX_SUGGESTED_CLIP_DURATION:
         logger.info("Detected sarcasm/irony marker '%s' after %.2fs. Safely extended end to %.2fs.",
                     match.group(0), end_t, extended_end)
         return start_t, extended_end, True
     else:
         logger.info("Detected sarcasm/irony marker '%s', but extended duration (%.2fs) exceeds max %.1fs. Rejecting candidate.",
-                    match.group(0), extended_end - start_t, MAX_CLIP_DURATION)
+                    match.group(0), extended_end - start_t, MAX_SUGGESTED_CLIP_DURATION)
         return start_t, end_t, False
 
 
@@ -880,7 +880,7 @@ def expand_short_candidate_with_context(
     segments: List[Dict[str, Any]],
     total_duration: float,
     min_duration: float = MIN_CLIP_DURATION,
-    max_duration: float = MAX_CLIP_DURATION
+    max_duration: float = MAX_SUGGESTED_CLIP_DURATION
 ) -> Optional[Tuple[float, float]]:
     """Recover a valuable moment that is shorter than min_duration (e.g. 3-4s punchline).
 
@@ -964,7 +964,7 @@ def validate_and_filter_candidates(
       4. Short moment recovery (< 5.0s): expands context backwards/forwards to reach >= 5.0s.
       5. Silence removal for long candidates (> 180.0s): evaluates dead-air removal. If speech
          fits <= 180.0s, qualifies. If still > 180.0s, finds natural complete subsection.
-      6. Strict duration constraint: MIN_CLIP_DURATION (5.0s) <= duration <= MAX_CLIP_DURATION (180.0s).
+      6. Strict duration constraint: MIN_CLIP_DURATION (5.0s) <= duration <= MAX_SUGGESTED_CLIP_DURATION (180.0s).
       7. Deduplication: Suppresses heavy overlapping clips (IoU > 0.5), keeping higher virality,
          while preserving distinct nearby candidates.
       8. Capped at max_clips (highest virality first).
@@ -1031,8 +1031,8 @@ def validate_and_filter_candidates(
             snapped_e = snap_to_word_boundary(end_t, segments, prefer_start=False)
             start_t = max(0.0, snapped_s - 0.15)
             end_t = min(total_duration, snapped_e + 0.20)
-            if (end_t - start_t) > MAX_CLIP_DURATION and (float(cand.end_time) - float(cand.start_time)) <= MAX_CLIP_DURATION:
-                end_t = min(total_duration, start_t + MAX_CLIP_DURATION)
+            if (end_t - start_t) > MAX_SUGGESTED_CLIP_DURATION and (float(cand.end_time) - float(cand.start_time)) <= MAX_SUGGESTED_CLIP_DURATION:
+                end_t = min(total_duration, start_t + MAX_SUGGESTED_CLIP_DURATION)
 
         raw_duration = round(end_t - start_t, 2)
 
@@ -1050,9 +1050,9 @@ def validate_and_filter_candidates(
 
         # 2. Handle long candidate & dead-air silence removal (> 180.0s)
         eff_dur, cuts = analyze_silence_gaps(start_t, end_t, segments)
-        if eff_dur > MAX_CLIP_DURATION:
+        if eff_dur > MAX_SUGGESTED_CLIP_DURATION:
             # Check for a natural complete subsection within limits
-            sub = find_natural_subsection_within_limit(start_t, end_t, segments, MAX_CLIP_DURATION, MIN_CLIP_DURATION)
+            sub = find_natural_subsection_within_limit(start_t, end_t, segments, MAX_SUGGESTED_CLIP_DURATION, MIN_CLIP_DURATION)
             if sub:
                 start_t, end_t = sub
                 eff_dur, cuts = analyze_silence_gaps(start_t, end_t, segments)
@@ -1060,13 +1060,13 @@ def validate_and_filter_candidates(
                             cand.title, start_t, end_t, eff_dur)
             else:
                 logger.info("Rejecting candidate '%s' (effective duration %.2fs > max %.2fs with no complete subsection)",
-                            cand.title, eff_dur, MAX_CLIP_DURATION)
+                            cand.title, eff_dur, MAX_SUGGESTED_CLIP_DURATION)
                 continue
 
         # 3. Final verification of effective duration
-        if eff_dur < MIN_CLIP_DURATION or eff_dur > MAX_CLIP_DURATION:
+        if eff_dur < MIN_CLIP_DURATION or eff_dur > MAX_SUGGESTED_CLIP_DURATION:
             logger.info("Rejecting candidate '%s' (final effective duration %.2fs outside [%.1fs, %.1fs])",
-                        cand.title, eff_dur, MIN_CLIP_DURATION, MAX_CLIP_DURATION)
+                        cand.title, eff_dur, MIN_CLIP_DURATION, MAX_SUGGESTED_CLIP_DURATION)
             continue
 
         duration = eff_dur
@@ -1401,7 +1401,7 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
         current_duration = seg["end"] - current_start
 
         if current_duration >= MIN_CLIP_DURATION:
-            if current_duration >= 45.0 or current_duration >= MAX_CLIP_DURATION:
+            if current_duration >= 45.0 or current_duration >= MAX_SUGGESTED_CLIP_DURATION:
                 block_text = " ".join(s.get("text", "") for s in current_block_segments).strip()
                 first_sentence = current_block_segments[0].get("text", "").strip()
 
@@ -1453,12 +1453,12 @@ def extract_clips_local_heuristic(segments: List[Dict[str, Any]], total_duration
     if not candidate_clips and MIN_CLIP_DURATION <= total_duration:
         clip_end = min(total_duration, float(segments[-1].get("end", total_duration)))
         clip_duration = clip_end - 0.0
-        if clip_duration > MAX_CLIP_DURATION:
-            matching_segs = [s for s in segments if float(s.get("end", 0.0)) <= MAX_CLIP_DURATION]
+        if clip_duration > MAX_SUGGESTED_CLIP_DURATION:
+            matching_segs = [s for s in segments if float(s.get("end", 0.0)) <= MAX_SUGGESTED_CLIP_DURATION]
             if matching_segs and (matching_segs[-1]["end"] - 0.0) >= MIN_CLIP_DURATION:
                 clip_end = matching_segs[-1]["end"]
             else:
-                clip_end = MAX_CLIP_DURATION
+                clip_end = MAX_SUGGESTED_CLIP_DURATION
 
         snippet_text = " ".join(s.get("text", "") for s in segments if float(s.get("end", 0.0)) <= clip_end).strip()
         candidate_clips.append({

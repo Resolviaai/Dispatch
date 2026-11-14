@@ -33,7 +33,6 @@ logger = logging.getLogger("dispatch.edit_windows")
 MAX_WINDOW_SECONDS = 300.0
 CONTEXT_SECONDS = 60.0
 MIN_SELECTION_SECONDS = 5.0
-MAX_SELECTION_SECONDS = 180.0
 
 # Transcription input bound for edit windows: separate from MAX_CLIP_DURATION
 # (the final-clip product limit). A 300 s window + model headroom.
@@ -132,12 +131,10 @@ def select_words_for_range(
 
 
 def validate_selection(sel_start: float, sel_end: float) -> Optional[str]:
-    """5-180 s product limit for the FINAL selection. Returns error or None."""
+    """5 s minimum product limit for the FINAL selection. Returns error or None."""
     dur = sel_end - sel_start
     if dur < MIN_SELECTION_SECONDS - 1e-6:
         return f"Selection must be at least {MIN_SELECTION_SECONDS:.0f} seconds"
-    if dur > MAX_SELECTION_SECONDS + 1e-6:
-        return f"Selection must be at most {MAX_SELECTION_SECONDS:.0f} seconds"
     return None
 
 

@@ -103,7 +103,6 @@
     {"name": "unsorted", "source_duration": 100.0, "ranges": [[20.0, 30.0], [10.0, 20.0]]},
     {"name": "piece_too_short", "source_duration": 100.0, "ranges": [[0.0, 0.09], [1.0, 6.0]]},
     {"name": "total_too_short", "source_duration": 100.0, "ranges": [[0.0, 4.99]]},
-    {"name": "total_too_long", "source_duration": 200.0, "ranges": [[0.0, 181.0]]},
     {"name": "below_source_bounds", "source_duration": 100.0, "ranges": [[-0.02, 10.0]]},
     {"name": "above_source_bounds", "source_duration": 100.0, "ranges": [[90.0, 100.02]]},
     {"name": "empty", "source_duration": 100.0, "ranges": []}

@@ -1,4 +1,3 @@
-export const MAX_CLIP_SELECTION_SECONDS = 180;
 export const MIN_CLIP_SELECTION_SECONDS = 5;
 export const RANGE_CONTROL_STEP_SECONDS = 0.5;
 
@@ -119,17 +118,13 @@ export function moveTrimPointer(
   const delta = (clientX - pointer.startX) / pixelsPerSecond;
   const { start, end } = pointer.initialRange;
   const minLength = Math.min(MIN_CLIP_SELECTION_SECONDS, sourceEnd);
-  const maxLength = Math.min(MAX_CLIP_SELECTION_SECONDS, sourceEnd);
 
   if (pointer.side === 'start') {
-    const minStart = Math.max(0, end - maxLength);
-    const maxStart = Math.max(minStart, end - minLength);
-    return { start: clamp(start + delta, minStart, maxStart), end };
+    return { start: clamp(start + delta, 0, Math.max(0, end - minLength)), end };
   }
 
   const minEnd = Math.min(sourceEnd, start + minLength);
-  const maxEnd = Math.min(sourceEnd, start + maxLength);
-  return { start, end: clamp(end + delta, minEnd, maxEnd) };
+  return { start, end: clamp(end + delta, minEnd, sourceEnd) };
 }
 
 function clamp(value: number, min: number, max: number): number {

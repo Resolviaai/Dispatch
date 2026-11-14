@@ -192,7 +192,7 @@ export const ActivityProvider: React.FC<{
         probe.src = objectUrl;
       });
       if (!Number.isFinite(durationSec) || durationSec <= 0) throw new Error('Could not read the video duration.');
-      if (durationSec > 180.5) throw new Error('Videos can be at most 3 minutes long.');
+      if (durationSec > 3600.5) throw new Error('Videos can be at most 60 minutes long.');
     } catch (err: any) {
       URL.revokeObjectURL(objectUrl);
       const msg = err instanceof Error ? err.message : 'Could not read this video.';

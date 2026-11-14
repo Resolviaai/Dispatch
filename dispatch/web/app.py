@@ -1794,7 +1794,7 @@ def handle_update_clip_trim(clip_id: str, payload: TrimClipRequest, request: Req
             raise HTTPException(status_code=409, detail="The selected range changed elsewhere. Reload the clip and retry.")
         raise HTTPException(
             status_code=400,
-            detail="Trim must stay inside the source and be between 5 and 180 seconds.",
+            detail=f"Trim must stay inside the source and be between {MIN_CLIP_DURATION:.0f} and {MAX_CLIP_DURATION:.0f} seconds.",
         )
 
     updated = db.get_clip_by_id(clip_id)

@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Tuple
 TimeRange = Tuple[float, float]
 MIN_PIECE_DURATION = 0.1
 MIN_TOTAL_DURATION = 5.0
-MAX_TOTAL_DURATION = 180.0
 SOURCE_BOUNDS_EPSILON = 0.01
 _TIME_EPSILON = 1e-9
 EDL_VERSION = 1
@@ -99,8 +98,6 @@ def normalize_ranges(
         total = kept_duration(normalized)
         if total + _TIME_EPSILON < MIN_TOTAL_DURATION:
             raise SegmentError(f"total kept duration must be at least {MIN_TOTAL_DURATION:.1f}s")
-        if total - _TIME_EPSILON > MAX_TOTAL_DURATION:
-            raise SegmentError(f"total kept duration must not exceed {MAX_TOTAL_DURATION:.1f}s")
     return normalized
 
 

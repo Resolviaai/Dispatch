@@ -7414,6 +7414,14 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                                       <Check size={10} /> Published
                                     </span>
                                   )}
+                                  {(p.id === 'youtube_shorts' || p.id === 'instagram') && ((currentClip.kept_duration ?? currentClip.duration) ?? 0) > 180 && (
+                                    <span
+                                      className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-0.5 shrink-0"
+                                      title="Shorts and Reels cap at 3 minutes — longer videos may be rejected by the platform"
+                                    >
+                                      <AlertCircle size={10} /> Over 3 min
+                                    </span>
+                                  )}
                                 </div>
                                 {hasAccount ? (
                                   <span className="text-xs text-text-muted font-mono block truncate">

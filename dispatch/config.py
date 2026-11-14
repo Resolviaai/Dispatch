@@ -85,7 +85,8 @@ ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 MIN_CLIP_DURATION = 5.0  # Canonical minimum highlight duration (seconds)
-MAX_CLIP_DURATION = 180.0  # Canonical maximum highlight duration (seconds)
+MAX_CLIP_DURATION = 3600.0  # Hard ceiling for user-trimmed clips (seconds)
+MAX_SUGGESTED_CLIP_DURATION = 180.0  # Upper bound for AI-generated highlight suggestions (platform Shorts/Reels limit)
 
 # Subtitle Styling Defaults (ASS)
 SUBTITLE_FONT = "Arial"

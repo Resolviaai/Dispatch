@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from typing import Dict, Any, List, Optional, Tuple
 
 from dispatch import db
-from dispatch.config import GEMINI_API_KEY, MAX_CLIP_DURATION, PROCESSING_DIR
+from dispatch.config import GEMINI_API_KEY, MAX_SUGGESTED_CLIP_DURATION, PROCESSING_DIR
 from dispatch.orchestrator.recovery import get_job_workspace_dir
 from dispatch.transcription.audio import (
     _probe_audio_duration,
@@ -1057,7 +1057,7 @@ def transcribe_stage2_precision_words(
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Precision word-level alignment for cut clip audio (primary: transcribe, fallback: flash-lite)."""
-    max_stage2_seconds = max_input_seconds if max_input_seconds else MAX_CLIP_DURATION + 16.0
+    max_stage2_seconds = max_input_seconds if max_input_seconds else MAX_SUGGESTED_CLIP_DURATION + 16.0
     if media_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
         from dispatch.ingestion.validator import inspect_video_orientation
         info = inspect_video_orientation(media_path)
@@ -1124,7 +1124,7 @@ def extract_stage2_clip_audio(
 ) -> Path:
     """Extract only a bounded clip window; never substitute the full source."""
     duration = end_seconds - start_seconds
-    if start_seconds < 0 or duration <= 0 or duration > MAX_CLIP_DURATION + 16.0:
+    if start_seconds < 0 or duration <= 0 or duration > MAX_SUGGESTED_CLIP_DURATION + 16.0:
         raise ValueError(f"Invalid bounded Stage 2 range [{start_seconds:.2f}, {end_seconds:.2f}]")
     last_error = "no extraction attempt completed"
     for attempt in range(1, max(1, attempts) + 1):
@@ -1190,7 +1190,7 @@ def drain_queued_transcriptions(max_batch: int = 10) -> int:
             p_end = float(clip["padded_end"]) if clip.get("padded_end") is not None else (c_end + 4.0)
 
             slice_duration = p_end - p_start
-            if p_start < 0 or slice_duration <= 0 or slice_duration > MAX_CLIP_DURATION + 16.0:
+            if p_start < 0 or slice_duration <= 0 or slice_duration > MAX_SUGGESTED_CLIP_DURATION + 16.0:
                 raise ValueError(f"Invalid bounded Stage 2 range [{p_start:.2f}, {p_end:.2f}]")
 
             drain_req_id = f"drain:{clip_id}:r{range_revision}:{uuid.uuid4().hex[:8]}"

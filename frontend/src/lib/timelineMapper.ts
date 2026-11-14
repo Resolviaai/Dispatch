@@ -12,7 +12,7 @@ export const TIMELINE_CONTRACT_VERSION = 1 as const;
 export const CANONICALIZER_VERSION = 'rfc8785-v1' as const;
 export const MIN_PIECE_DURATION = 0.1;
 export const MIN_TOTAL_DURATION = 5.0;
-export const MAX_TOTAL_DURATION = 180.0;
+export const MAX_TOTAL_DURATION = 3600.0;
 const TIME_EPSILON = 1e-9;
 
 declare const __coordinateBrand: unique symbol;
@@ -854,7 +854,7 @@ export function validateTimelineSegments(segments: unknown): {
     return { valid: false, error: `total kept duration (${total}s) must be at least 5.0s`, keptDuration: total };
   }
   if (total > MAX_TOTAL_DURATION) {
-    return { valid: false, error: `total kept duration (${total}s) exceeds 180.0s maximum`, keptDuration: total };
+    return { valid: false, error: `total kept duration (${total}s) exceeds ${MAX_TOTAL_DURATION.toFixed(1)}s maximum`, keptDuration: total };
   }
   return { valid: true, keptDuration: total, canonicalSegments };
 }
