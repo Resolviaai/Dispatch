@@ -1171,6 +1171,8 @@ interface FramedVideoStageProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   bgVideoRef: React.RefObject<HTMLVideoElement>;
   setIsPlaying: (playing: boolean) => void;
+  isBuffering?: boolean;
+  setIsBuffering?: (buffering: boolean) => void;
   showPlayPauseOverlay?: boolean;
   children?: React.ReactNode;
   poster?: string;
@@ -1203,6 +1205,8 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
   videoRef,
   bgVideoRef,
   setIsPlaying,
+  isBuffering = false,
+  setIsBuffering,
   showPlayPauseOverlay = true,
   children,
   maxHeight,
@@ -1497,6 +1501,7 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
               }}
               onTimeUpdate={onTimeUpdate}
               onError={() => {
+                setIsBuffering?.(false);
                 if (activeVideoUrl === fallbackVideoUrl) {
                   setFallbackFailed(true);
                 } else if (_videoUrl && activeVideoUrl === _videoUrl) {
@@ -1506,17 +1511,31 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
                 }
               }}
               onPlay={() => {
-                setIsPlaying(true);
                 if (layoutMode === 'fit_blur') {
                   bgVideoRef.current?.play().catch(() => { });
                 }
               }}
+              onPlaying={() => {
+                // onPlay fires the moment play() is called, before any frame
+                // decodes; only 'playing' means media is actually rendering.
+                setIsPlaying(true);
+                setIsBuffering?.(false);
+              }}
+              onWaiting={(e) => {
+                // A seek while paused also fires waiting; only surface stalls
+                // during active playback so the button never gets stuck spinning.
+                if (!e.currentTarget.paused) {
+                  setIsBuffering?.(true);
+                }
+              }}
               onPause={() => {
                 setIsPlaying(false);
+                setIsBuffering?.(false);
                 bgVideoRef.current?.pause();
               }}
               onEnded={() => {
                 setIsPlaying(false);
+                setIsBuffering?.(false);
                 bgVideoRef.current?.pause();
               }}
               className={`absolute inset-0 z-10 w-full h-full pointer-events-none will-change-transform ${
@@ -1559,7 +1578,7 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
           >
             {!isPlaying && (
               <div className="w-12 h-12 rounded-full bg-black/60 border border-white/25 flex items-center justify-center text-white backdrop-blur shadow-xl active:scale-[0.95] transition-all">
-                <Play size={20} fill="currentColor" className="ml-0.5" />
+                {isBuffering ? <RotateCw size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" className="ml-0.5" />}
               </div>
             )}
           </button>
@@ -1754,7 +1773,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   // Playback & Video Sync
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pauseIntentRef = useRef<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [isSourceTimebase, setIsSourceTimebase] = useState<boolean>(true);
@@ -1895,6 +1916,23 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     [allClips, selectedClipId]
   );
   currentClipRef.current = currentClip;
+
+  // Gate the PC-hosted source URL on daemon reachability so an offline PC falls
+  // straight through to the cloud copy instead of hanging 20-40s on a dead host.
+  // Clips with no cloud copy yet keep the PC URL as their only playable candidate.
+  const editorSourceVideoUrl = useMemo(() => {
+    if (!currentClip) return undefined;
+    const raw = currentClip.source_video_url || '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const hasCloudFallback = Boolean(
+      currentClip.edit_window_url ||
+      currentClip.remote_url ||
+      (currentClip.video_url && currentClip.video_url.startsWith('http'))
+    );
+    const pcReachable = Boolean(pcHost && isPcOnline !== false);
+    if (!pcReachable && hasCloudFallback) return undefined;
+    return apiUrl(raw || `/api/clips/${currentClip.id}/source`, pcHost);
+  }, [currentClip, pcHost, isPcOnline]);
 
   // Reset publish platform & account selection cleanly whenever switching clips so
   // one clip's manual platform/account choice never leaks onto another clip.
@@ -3029,21 +3067,39 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
           if (bgVideoRef.current) bgVideoRef.current.currentTime = 0;
         }
       }
+      pauseIntentRef.current = false;
+      setIsBuffering(true);
       video.play().then(() => {
-        setIsPlaying(true);
         if (bgVideoRef.current) bgVideoRef.current.play().catch(() => { });
       }).catch((err) => {
-        console.warn('Playback interrupted:', err);
         setIsPlaying(false);
-        setPlaybackFeedback('Playback interrupted. Tap play again.');
-        setTimeout(() => setPlaybackFeedback(null), 3500);
+        setIsBuffering(false);
+        const errName = (err as DOMException)?.name;
+        if (errName === 'AbortError') {
+          // pause() or a src swap cancelled the pending play(). Silent when a
+          // deliberate pause caused it; otherwise media is still loading.
+          if (!pauseIntentRef.current) {
+            setPlaybackFeedback('Still loading media…');
+            setTimeout(() => setPlaybackFeedback(null), 3500);
+          }
+        } else if (errName === 'NotSupportedError') {
+          // The element fires onError in parallel, which advances the
+          // candidate-URL cascade inside FramedVideoStage.
+          setPlaybackFeedback('Video format unavailable');
+          setTimeout(() => setPlaybackFeedback(null), 3500);
+        } else {
+          setPlaybackFeedback('Tap play again');
+          setTimeout(() => setPlaybackFeedback(null), 3500);
+        }
       });
     } else {
+      pauseIntentRef.current = true;
       video.pause();
       if (bgVideoRef.current) bgVideoRef.current.pause();
       contextPreviewRef.current = null;
       lastJumpedCutIdRef.current = null;
       setIsPlaying(false);
+      setIsBuffering(false);
     }
   };
 
@@ -6050,6 +6106,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               videoRef={videoRef}
               bgVideoRef={bgVideoRef}
               setIsPlaying={setIsPlaying}
+              isBuffering={isBuffering}
+              setIsBuffering={setIsBuffering}
               showPlayPauseOverlay={true}
               isDetail={true}
             >
@@ -6100,7 +6158,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 title={isPlaying ? 'Pause' : 'Play'}
                 aria-label={isPlaying ? 'Pause' : 'Play'}
               >
-                {isPlaying ? <Pause size={16} /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
+                {isBuffering ? <RotateCw size={16} className="animate-spin" /> : isPlaying ? <Pause size={16} /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
               </button>
 
               {/* Creator App Scrubber */}
@@ -6626,7 +6684,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
           }}
         >
           <FramedVideoStage
-            sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
+            sourceVideoUrl={editorSourceVideoUrl}
             videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
             fallbackVideoUrl={currentClip.edit_window_url || currentClip.remote_url || (currentClip.video_url && currentClip.video_url.startsWith('http') ? currentClip.video_url : undefined)}
             poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
@@ -6651,6 +6709,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
             videoRef={videoRef}
             bgVideoRef={bgVideoRef}
             setIsPlaying={setIsPlaying}
+            isBuffering={isBuffering}
+            setIsBuffering={setIsBuffering}
             showPlayPauseOverlay={false}
             isCompact={false}
             isDetail={true}
@@ -6749,7 +6809,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
               className="w-7 h-7 rounded-full bg-primary hover:bg-primary-hover text-white flex items-center justify-center shadow-hero-glow active:scale-95 transition-all"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" className="ml-0.5" />}
+              {isBuffering ? <RotateCw size={12} className="animate-spin" /> : isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" className="ml-0.5" />}
             </button>
 
             {/* Right: Undo & Redo + Set Default Template action buttons */}
@@ -7086,7 +7146,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
 
             <div className="flex-1 flex items-center justify-center overflow-hidden">
               <FramedVideoStage
-                sourceVideoUrl={apiUrl(currentClip.source_video_url || `/api/clips/${currentClip.id}/source`, pcHost)}
+                sourceVideoUrl={editorSourceVideoUrl}
                 videoUrl={currentClip.video_url ? (currentClip.video_url.startsWith('http') ? currentClip.video_url : apiUrl(currentClip.video_url, pcHost)) : undefined}
                 fallbackVideoUrl={currentClip.edit_window_url || currentClip.remote_url || (currentClip.video_url && currentClip.video_url.startsWith('http') ? currentClip.video_url : undefined)}
                 poster={currentClip.thumbnail_url ? (currentClip.thumbnail_url.startsWith('http') ? currentClip.thumbnail_url : apiUrl(currentClip.thumbnail_url, pcHost)) : undefined}
@@ -7112,6 +7172,8 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 videoRef={videoRef}
                 bgVideoRef={bgVideoRef}
                 setIsPlaying={setIsPlaying}
+                isBuffering={isBuffering}
+                setIsBuffering={setIsBuffering}
                 showPlayPauseOverlay={true}
                 maxHeight="75vh"
               >
@@ -7132,7 +7194,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 onClick={handleTogglePlay}
                 className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center active:scale-95"
               >
-                {isPlaying ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}
+                {isBuffering ? <RotateCw size={14} className="animate-spin" /> : isPlaying ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}
               </button>
               <input
                 type="range"
