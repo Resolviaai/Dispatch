@@ -27,6 +27,8 @@ class CloudConfig:
     default_user_quota_bytes: int = 2_000_000_000
     max_user_quota_bytes: int = 10_000_000_000
     global_object_budget_bytes: int = 10_000_000_000
+    owner_user_quota_bytes: int = 10_000_000_000
+    owner_email: str = "resolviaai@gmail.com"
     max_clip_object_bytes: int = 512 * MIB
     max_thumbnail_bytes: int = 8 * MIB
     max_outstanding_uploads_per_user: int = 3
@@ -82,6 +84,15 @@ def load_cloud_config(env: dict | None = None) -> CloudConfig:
             except ValueError:
                 raise ValueError(f"Environment variable {name} must be an integer, got {raw!r}")
     return CloudConfig(**values)
+
+
+def resolve_user_quota(user_email: Optional[str] = None, user_quota: Optional[int] = None) -> int:
+    """Resolve quota ensuring owner account (resolviaai@gmail.com) gets full 10 GB quota floor."""
+    if user_email and user_email.strip().lower() == "resolviaai@gmail.com":
+        return 10_000_000_000
+    if user_quota is not None and user_quota > 0:
+        return user_quota
+    return 2_000_000_000
 
 
 def is_secret_env_name(name: str) -> bool:

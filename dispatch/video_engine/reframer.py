@@ -27,7 +27,9 @@ def build_filter_complex(
     layout_mode: str = "fit_blur",
     ass_subtitle_path: Optional[Path] = None,
     input_v_label: str = "[0:v]",
-    crop_anchor_x: Optional[float] = None
+    crop_anchor_x: Optional[float] = None,
+    fade_duration: float = 0.0,
+    total_duration: Optional[float] = None,
 ) -> Tuple[str, str]:
     """Build FFmpeg filter_complex string for orientation-aware conversion and subtitle burning.
     
@@ -122,6 +124,12 @@ def build_filter_complex(
             )
 
     current_label = "[base]"
+
+    if fade_duration > 0 and total_duration and total_duration > fade_duration:
+        d = min(fade_duration, max(0.05, total_duration / 4.0))
+        out_st = max(0.0, total_duration - d)
+        filters.append(f"{current_label}fade=t=in:st=0:d={d:.3f},fade=t=out:st={out_st:.3f}:d={d:.3f}[faded]")
+        current_label = "[faded]"
 
     if ass_subtitle_path and ass_subtitle_path.exists():
         escaped_sub = escape_ffmpeg_filter_path(ass_subtitle_path)

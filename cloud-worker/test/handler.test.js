@@ -2050,3 +2050,86 @@ test("/clips/:id/supersede-window refuses media owned by another user", async ()
   assert.equal((await res.json()).reclaimed, 0);
   assert.deepEqual(bucket.deleted, []);
 });
+
+// ---- Phase 4 dual render fallback (pending PC render queue) ----
+
+test("/clips/:id/request-pc-render requires auth", async () => {
+  const res = await post(`/clips/clip_local/request-pc-render`, {}, { "content-type": "application/json" });
+  assert.equal(res.status, 401);
+});
+
+test("/clips/:id/request-pc-render saves the timeline document then flags the clip", async () => {
+  let docPatched = null;
+  let rpcBody = null;
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [{ id: "c-cloud-uuid", local_clip_id: "clip_local" }] }) });
+  supabase.set("clips_cloud?id=eq.", { method: "PATCH", fn: (_url, init) => { docPatched = JSON.parse(init.body); return { body: null }; } });
+  supabase.set("/rpc/cloud_request_pc_render", { method: "POST", fn: (_url, init) => { rpcBody = JSON.parse(init.body); return { body: null }; } });
+
+  const doc = { version: 7, timeline: { segments: [{ start: 0, end: 5 }] } };
+  const res = await post(`/clips/clip_local/request-pc-render`, { project_document: doc });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { queued: true });
+  assert.equal(docPatched.project_document.version, 7);
+  assert.ok(docPatched.cloud_updated_at, "document save must refresh cloud_updated_at");
+  assert.equal(rpcBody.p_user_id, USER_A);
+  assert.equal(rpcBody.p_local_clip_id, "clip_local");
+});
+
+test("/clips/:id/request-pc-render queues without a document flush when body omits it", async () => {
+  let docPatched = 0;
+  let rpcBody = null;
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [{ id: "c-cloud-uuid", local_clip_id: "clip_local" }] }) });
+  supabase.set("clips_cloud?id=eq.", { method: "PATCH", fn: () => { docPatched++; return { body: null }; } });
+  supabase.set("/rpc/cloud_request_pc_render", { method: "POST", fn: (_url, init) => { rpcBody = JSON.parse(init.body); return { body: null }; } });
+
+  const res = await post(`/clips/clip_local/request-pc-render`, {});
+  assert.equal(res.status, 200);
+  assert.equal(docPatched, 0);
+  assert.equal(rpcBody.p_local_clip_id, "clip_local");
+});
+
+test("/clips/:id/request-pc-render 404 for an unknown clip", async () => {
+  supabase.set("clips_cloud?user_id=eq.", { fn: () => ({ body: [] }) });
+  const res = await post(`/clips/missing/request-pc-render`, {});
+  assert.equal(res.status, 404);
+});
+
+test("GET /sync/pc/renders claims pending renders via RPC", async () => {
+  let rpcBody = null;
+  supabase.set("/rpc/cloud_list_pending_pc_renders", {
+    method: "POST",
+    fn: (_url, init) => {
+      rpcBody = JSON.parse(init.body);
+      return { body: [{ id: "c-cloud-uuid", local_clip_id: "clip_local", render_requested_at: "2026-11-14T00:00:00Z", range_revision: 3, render_fingerprint: "fp-a", rendered_fingerprint: "fp-b" }] };
+    },
+  });
+  const res = await worker.fetch(new Request("https://w.test/sync/pc/renders", { method: "GET", headers: pcHeaders(USER_A) }), env());
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, "ok");
+  assert.equal(rpcBody.p_user_id, USER_A);
+  assert.equal(body.renders.length, 1);
+  assert.equal(body.renders[0].clip_id, "clip_local");
+  assert.equal(body.renders[0].render_fingerprint, "fp-a");
+});
+
+test("GET /sync/pc/renders without PC auth is rejected", async () => {
+  const res = await worker.fetch(new Request("https://w.test/sync/pc/renders", { method: "GET" }), env());
+  assert.equal(res.status, 401);
+});
+
+test("POST /sync/pc/renders/complete clears the pending flag", async () => {
+  let patchBody = null;
+  supabase.set("clips_cloud?user_id=eq.", { method: "PATCH", fn: (_url, init) => { patchBody = JSON.parse(init.body); return { body: null }; } });
+
+  const res = await post("/sync/pc/renders/complete", { local_clip_id: "clip_local" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { cleared: true });
+  assert.equal(patchBody.pending_pc_render, false);
+  assert.ok(patchBody.cloud_updated_at);
+});
+
+test("POST /sync/pc/renders/complete requires a clip id", async () => {
+  const res = await post("/sync/pc/renders/complete", {});
+  assert.equal(res.status, 400);
+});

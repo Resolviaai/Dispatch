@@ -1653,7 +1653,7 @@ def import_cloud_caption_data(
                 cloud_caption_revision = ?,
                 caption_range_revision = ?,
                 caption_timing_warning = ?,
-                caption_coordinate_system = 'window_relative',
+                caption_coordinate_system = 'clip_relative',
                 render_stale = 1
             WHERE id = ?
         """, (

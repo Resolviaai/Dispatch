@@ -8,7 +8,7 @@ import subprocess
 import logging
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dispatch.config import CLIPS_DIR, PROCESSING_DIR, MAX_CLIP_DURATION, MIN_CLIP_DURATION
 from dispatch.transcription.subprocess_utils import low_priority_subprocess_kwargs
 from dispatch.video_engine.subtitle_generator import generate_ass_subtitles
@@ -21,6 +21,58 @@ from dispatch.video_engine.silence import (
 from dispatch import db
 
 logger = logging.getLogger("dispatch.renderer")
+
+
+def build_fade_filters(duration: float, fade_duration: float = 0.3) -> Tuple[str, str]:
+    """Build clean video and audio fade filters for normalized duration.
+    
+    Returns:
+        (video_filter_string, audio_filter_string)
+        e.g. ('fade=t=in:st=0:d=0.300,fade=t=out:st=14.700:d=0.300',
+              'afade=t=in:ss=0:d=0.300,afade=t=out:st=14.700:d=0.300')
+    """
+    d = min(fade_duration, max(0.05, duration / 4.0)) if duration > 0 else fade_duration
+    out_st = max(0.0, duration - d)
+    v_fade = f"fade=t=in:st=0:d={d:.3f},fade=t=out:st={out_st:.3f}:d={d:.3f}"
+    a_fade = f"afade=t=in:ss=0:d={d:.3f},afade=t=out:st={out_st:.3f}:d={d:.3f}"
+    return v_fade, a_fade
+
+
+def build_xfade_filter(
+    num_inputs: int,
+    durations: List[float],
+    transition_duration: float = 0.3,
+    transition: str = "fade"
+) -> Tuple[str, str, str]:
+    """Build xfade and acrossfade filter strings for multi-scene concatenation.
+    
+    Normalizes transitions across sequential segments.
+    Returns:
+        (full_filter_str, final_v_label, final_a_label)
+    """
+    if num_inputs <= 1:
+        return "", "[0:v]", "[0:a]"
+    v_filters = []
+    a_filters = []
+    offset = max(0.0, (durations[0] if durations else 0.0) - transition_duration)
+    last_v = "[0:v]"
+    last_a = "[0:a]"
+    for i in range(1, num_inputs):
+        next_v = f"[{i}:v]"
+        next_a = f"[{i}:a]"
+        out_v = f"[v_xf_{i}]" if i < num_inputs - 1 else "[concat_v]"
+        out_a = f"[a_xf_{i}]" if i < num_inputs - 1 else "[concat_a]"
+        v_filters.append(
+            f"{last_v}{next_v}xfade=transition={transition}:duration={transition_duration:.3f}:offset={offset:.3f}{out_v}"
+        )
+        a_filters.append(
+            f"{last_a}{next_a}acrossfade=d={transition_duration:.3f}{out_a}"
+        )
+        last_v = out_v
+        last_a = out_a
+        if i < len(durations) - 1:
+            offset += max(0.0, durations[i] - transition_duration)
+    return ";".join(v_filters + a_filters), "[concat_v]", "[concat_a]"
 
 
 def render_clip(
@@ -121,29 +173,11 @@ def render_clip(
     else:
         captured_track = sub_opts.get("caption_track")
         existing_cap_json = db.get_clip_caption_data(clip_id) if captured_track is None else None
-        # Caption coordinate-space guard (audit 2026-11): a saved track may be
-        # clip-relative, edit-window-relative, or source-anchored. Only verified
-        # clip-relative tracks shift by start_time; source-anchored tracks map
-        # through the EDL spans unshifted, and window-relative tracks anchor at
-        # the clip's padded window origin when it is recorded.
-        clip_coord = str((clip_at_start or {}).get("caption_coordinate_system") or "clip_relative").strip().lower()
-        if clip_coord == "source_relative":
-            caption_anchor = 0.0
-        elif clip_coord == "window_relative":
-            padded_start = (clip_at_start or {}).get("padded_start")
-            try:
-                padded_val = float(padded_start) if padded_start is not None else None
-            except (TypeError, ValueError):
-                padded_val = None
-            if padded_val is not None and padded_val == padded_val and padded_val >= 0.0:
-                caption_anchor = padded_val
-            else:
-                # Window origin unknown: keep the historical anchor rather than
-                # inventing one (legacy clips never recorded padded_start).
-                caption_anchor = float(start_time or 0.0)
-        else:
-            clip_coord = "clip_relative"
-            caption_anchor = float(start_time or 0.0)
+        # Strict 2-window architecture: The Temporary Edit Window IS the Master File.
+        # Time base is strictly zeroed (0.000). Captions operate on the canonical
+        # clip-relative timeline without source_relative or window_relative shifts.
+        clip_coord = "clip_relative"
+        caption_anchor = float(start_time or 0.0)
         effective_spans = timeline_spans if (timeline_spans and len(timeline_spans) > 1) else (
             build_silence_keep_intervals(start_time, end_time, cuts) if has_silence_cuts else None
         )
@@ -284,9 +318,10 @@ def render_clip(
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "fast",
-            "-crf", "20",
+            "-crf", "18",
             "-pix_fmt", "yuv420p",
             "-threads", "2",
+            "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
             str(temp_video_path)
         ])
@@ -310,12 +345,13 @@ def render_clip(
             "-map", "0:a?",
             "-c:v", "libx264",
             "-preset", "fast",
-            "-crf", "20",
+            "-crf", "18",
             "-pix_fmt", "yuv420p",
             "-threads", "2",
             "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
             "-c:a", "aac",
             "-b:a", "192k",
+            "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
             str(temp_video_path)
         ]
@@ -493,12 +529,13 @@ def slice_clean_clip(
         "-i", str(source_video),
         "-c:v", "libx264",
         "-preset", "fast",
-        "-crf", "20",
+        "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-threads", "2",
         "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
         "-c:a", "aac",
         "-b:a", "192k",
+        "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
         str(temp_video_path),
     ]

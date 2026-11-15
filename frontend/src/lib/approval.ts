@@ -39,6 +39,9 @@ export interface ApprovalExecutionParams {
   getAuthHeaders?: () => Record<string, string>;
   apiUrl?: (path: string, host?: string) => string;
   localCaptionsRevision?: number;
+  // Phase 4 proxy export: render from the cached full-source proxy instead of
+  // the PC's raw source file when the phone renders without the PC.
+  proxySourcePath?: string;
 }
 
 export interface ApprovalExecutionResult {
@@ -320,6 +323,7 @@ export async function executeClipApproval(
     getAuthHeaders = () => ({}),
     apiUrl = (path: string, host?: string) => (host ? `${host.replace(/\/+$/, '')}${path}` : path),
     localCaptionsRevision,
+    proxySourcePath,
   } = params;
 
   const rev = clip.range_revision || 0;
@@ -410,7 +414,7 @@ export async function executeClipApproval(
         const renderJobPayload = {
           clip_id: clip.id,
           project_document: effectiveDoc,
-          source_video_path: clip.local_path || clip.video_path || '',
+          source_video_path: proxySourcePath || clip.local_path || clip.video_path || '',
           layout_mode: optimisticLayout,
           crop_anchor_x: typeof clip.crop_anchor_x === 'number' ? clip.crop_anchor_x : 0.5,
           target_resolution: '1080p',

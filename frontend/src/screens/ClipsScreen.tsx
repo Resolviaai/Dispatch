@@ -43,6 +43,7 @@ import {
   Plus,
   Bell,
   Upload,
+  MonitorDown,
 } from 'lucide-react';
 import { useActivity } from '../context/ActivityContext';
 import { NotificationCenterModal } from '../components/NotificationCenterModal';
@@ -1810,6 +1811,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
   const [fullProxyUrls, setFullProxyUrls] = useState<Record<string, string>>({});
   const [fullProxyStatus, setFullProxyStatus] = useState<{ clipId: string; phase: 'loading' | 'progress'; bytes: number; totalBytes: number } | null>(null);
   const [sourceDurationForClip, setSourceDurationForClip] = useState<{ clipId: string; seconds: number } | null>(null);
+  // Phase 4 dual render fallback: pending export choice for a full-source clip
+  // when the PC is unreachable — export the cached 720p proxy now, or queue a
+  // 1080p render on the headless PC.
+  const [pcRenderChoice, setPcRenderChoice] = useState<{
+    clip: ClipItem;
+    approvalParams: Record<string, any>;
+    idempotencyKey: string;
+  } | null>(null);
   const [filmstripData, setFilmstripData] = useState<FilmstripData | null>(null);
   const filmstripReqIdRef = useRef<number>(0);
   const [mainVideoVolume, setMainVideoVolume] = useState<number>(100);
@@ -5432,6 +5441,20 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
         accountsMap,
       });
 
+      // Phase 4 dual render fallback: a full-source edit on a cloud clip with
+      // the PC unreachable would otherwise burn the 720p proxy into the final
+      // render. Offer the explicit proxy-vs-queued-PC choice first.
+      if (
+        resolvedRoute.route === 'mobile_render_cloud' &&
+        fullSourceApprovedIds.has(clipToApprove.id) &&
+        fullProxyUrls[clipToApprove.id]
+      ) {
+        setIsSubmitting(false);
+        setFeedback(null);
+        setPcRenderChoice({ clip: clipToApprove, approvalParams, idempotencyKey });
+        return;
+      }
+
       const result = await executeClipApproval({
         ...approvalParams,
         idempotencyKey,
@@ -5446,6 +5469,143 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       console.error('Approval execution error:', err);
       restoreToReady(`Approval failed: ${err?.message || err}`);
     }
+  };
+
+  // Phase 4 dual render fallback — modal choices for a full-source export
+  // while the PC is unreachable.
+
+  const handleExportProxyNow = async () => {
+    const choice = pcRenderChoice;
+    if (!choice) return;
+    const clipToApprove = choice.clip;
+    const params = choice.approvalParams;
+    setPcRenderChoice(null);
+    setIsSubmitting(true);
+    setFeedback('Rendering from cached full source…');
+    const restore = (message: string) => {
+      setReadyClips((prev) => (prev.some((c) => c.id === clipToApprove.id) ? prev : [clipToApprove, ...prev]));
+      setFeedback(message);
+      setIsSubmitting(false);
+    };
+    const approve = (message: string) => {
+      const approvedItem: ClipItem = {
+        ...clipToApprove,
+        title: params.optimisticTitle,
+        description: params.optimisticDescription,
+        layout_mode: params.optimisticLayout,
+        publish_mode: params.optimisticMode,
+        status: 'approved',
+        approved_at: new Date().toISOString(),
+      };
+      setReadyClips((prev) => prev.filter((c) => c.id !== clipToApprove.id));
+      setApprovedClips((prev) => [approvedItem, ...prev.filter((c) => c.id !== clipToApprove.id)]);
+      setViewMode('library');
+      setSelectedClipId(null);
+      setFeedback(message);
+      setIsSubmitting(false);
+      setTimeout(() => { fetchClips(); }, 1500);
+    };
+    try {
+      const result = await executeClipApproval({
+        ...(params as any),
+        idempotencyKey: choice.idempotencyKey,
+        proxySourcePath: `full_proxies/${clipToApprove.id}.mp4`,
+      });
+      if (result.success) approve(result.message);
+      else restore(result.error || result.message);
+    } catch (err: any) {
+      restore(`Approval failed: ${err?.message || err}`);
+    }
+  };
+
+  const handleQueuePcRender = async () => {
+    const choice = pcRenderChoice;
+    if (!choice) return;
+    const clip = choice.clip;
+    setPcRenderChoice(null);
+    const cloudId = (clip as any).cloud_id as string | undefined;
+    try {
+      if (!cloudId) throw new Error('This clip has no cloud copy to queue against');
+      let doc: any = null;
+      const raw = (clip as any).project_document;
+      if (typeof raw === 'string' && raw.trim().length > 0) {
+        try { doc = JSON.parse(raw); } catch { doc = null; }
+      } else if (raw && typeof raw === 'object') {
+        doc = raw;
+      }
+      const res = await fetch(`${WORKER_BASE}/clips/${encodeURIComponent(String(cloudId))}/request-pc-render`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(doc ? { project_document: doc } : {}),
+      });
+      if (!res.ok) throw new Error(`Queue failed (HTTP ${res.status})`);
+      setFeedback('Queued — your PC will automatically render in 1080p as soon as it comes online');
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (err: any) {
+      setFeedback(err?.message || 'Could not queue the PC render');
+      setTimeout(() => setFeedback(null), 3500);
+    }
+  };
+
+  const renderPcRenderChoiceModal = () => {
+    if (!pcRenderChoice) return null;
+    const proxyQualityNote = 'The cached full source is a 720p proxy. Export now renders the final cut from it; a queued PC render uses the raw full-resolution source instead.';
+
+    return (
+      <div
+        onClick={() => setPcRenderChoice(null)}
+        className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-sm rounded-t-3xl sm:rounded-2xl bg-canvas border border-border p-5 pb-8 sm:pb-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom-4 duration-200"
+        >
+          <div className="w-10 h-1 rounded-full bg-surface-300/60 mx-auto -mt-2 mb-2 sm:hidden" />
+
+          <div className="flex items-start gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-surface-200 border border-border flex items-center justify-center shrink-0 text-text-main">
+              <MonitorDown size={20} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold tracking-tight text-text-main leading-tight">
+                Export without your PC?
+              </h3>
+              <p className="text-sm text-text-secondary mt-1 leading-snug">
+                {proxyQualityNote}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 pt-1">
+            <button
+              type="button"
+              onClick={handleExportProxyNow}
+              disabled={isSubmitting}
+              className="w-full min-h-[44px] rounded-xl bg-primary hover:bg-primary-hover text-white text-sm font-semibold shadow-hero-glow flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              <span>Export proxy now</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleQueuePcRender}
+              disabled={isSubmitting}
+              className="w-full min-h-[44px] rounded-xl bg-surface-200 hover:bg-surface-300 border border-border text-text-main text-sm font-semibold flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              <Cloud size={14} />
+              <span>Auto-render Full HD on PC</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPcRenderChoice(null)}
+              disabled={isSubmitting}
+              className="w-full min-h-[44px] rounded-xl text-text-secondary text-sm font-medium flex items-center justify-center active:scale-[0.98] transition-all"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // 6. Double Confirmation Reject Handlers
@@ -8130,6 +8290,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
       {viewMode === 'publish' && renderPublishView()}
       {renderMoreModal()}
       {renderRejectConfirmationModal()}
+      {renderPcRenderChoiceModal()}
 
       {/* ACTIVITY & NOTIFICATION CENTER BOTTOM SHEET */}
       <NotificationCenterModal

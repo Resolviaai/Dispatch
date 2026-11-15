@@ -460,7 +460,7 @@ class _WorkerEditWindowMediaStore:
             media_object_id=data["media_object_id"],
         )
 
-    def upload_and_finalize(self, reservation: Any, proxy_path: str, user_id: str) -> str:
+    def upload_and_finalize(self, reservation: Any, proxy_path: str, user_id: str) -> SimpleNamespace:
         with open(proxy_path, "rb") as vf:
             r_put = requests.put(
                 reservation.upload_url,
@@ -478,7 +478,12 @@ class _WorkerEditWindowMediaStore:
         )
         if not r_comp.ok:
             raise RuntimeError(f"R2 complete failed ({r_comp.status_code}): {r_comp.text[:200]}")
-        return str(reservation.media_object_id)
+        comp = r_comp.json() if r_comp.text else {}
+        return SimpleNamespace(
+            media_object_id=str(reservation.media_object_id),
+            final_key=str(comp.get("final_key") or ""),
+            byte_count=int(comp.get("byte_count") or 0),
+        )
 
 
 class _WorkerEditWindowDbOps:
@@ -1525,6 +1530,142 @@ def sync_cloud_template_for_user(worker_url: str, worker_token: str, user_id: st
     return False
 
 
+def _clear_pending_pc_render(worker_url: str, worker_token: str, user_id: str, local_clip_id: str) -> bool:
+    try:
+        res = requests.post(
+            f"{worker_url}/sync/pc/renders/complete",
+            headers=_cloud_headers(worker_token, user_id),
+            json={"local_clip_id": local_clip_id},
+            timeout=15,
+        )
+        if res.ok:
+            return True
+        logger.warning("clear pending_pc_render failed for %s: HTTP %s (%s)",
+                       local_clip_id, res.status_code, res.text[:200])
+        return False
+    except Exception as e:
+        logger.error("clear pending_pc_render failed for %s: %s", local_clip_id, e)
+        return False
+
+
+def _execute_pending_pc_render(
+    worker_url: str,
+    worker_token: str,
+    user_id: str,
+    local_clip_id: str,
+    pending_item: Dict[str, Any],
+) -> bool:
+    """Render one queued clip at full 1080p from the raw source and ship it to the cloud.
+
+    render_clip performs the pre-render cloud timeline sweep itself, so the cut
+    matches the latest phone-edited state even if the request sat queued for hours.
+    Failures raise: the pending flag stays set and the next sync cycle retries.
+    """
+    clip = db.get_clip_by_id(local_clip_id)
+    if not clip:
+        logger.warning("pending PC render skipped: local clip %s not found", local_clip_id)
+        return False
+    clip_owner = str(clip.get("user_id") or "").strip()
+    if clip_owner and clip_owner != user_id:
+        logger.warning("pending PC render skipped: clip %s owner %s != requester %s",
+                       local_clip_id, clip_owner, user_id)
+        return False
+
+    render_fp = str(pending_item.get("render_fingerprint") or "")
+    rendered_fp = str(pending_item.get("rendered_fingerprint") or "")
+    if render_fp and rendered_fp and rendered_fp == render_fp:
+        logger.info("pending PC render for %s already fresh (fp %s); clearing flag",
+                    local_clip_id, render_fp[:12])
+        return _clear_pending_pc_render(worker_url, worker_token, user_id, local_clip_id)
+
+    source_path, _source_duration = _resolve_raw_source_and_duration(clip)
+    if not source_path:
+        raise RuntimeError(f"raw source unavailable for clip {local_clip_id}")
+
+    from dispatch.video_engine.renderer import render_clip
+    result = render_clip(
+        source_video=Path(source_path),
+        clip_id=local_clip_id,
+        start_time=float(clip.get("start_time") or 0),
+        end_time=float(clip.get("end_time") or 0),
+        layout_mode=str(clip.get("layout_mode") or "fit_blur"),
+    )
+    video_path = str(result.get("video_path") or "")
+    if not video_path or not Path(video_path).exists():
+        raise RuntimeError(f"render produced no output for clip {local_clip_id}")
+
+    store = _WorkerEditWindowMediaStore(worker_url, worker_token)
+    size = Path(video_path).stat().st_size
+    reservation = store.reserve_upload(
+        user_id=user_id, object_kind="render", mime_type="video/mp4",
+        expected_bytes=size, local_clip_id=local_clip_id)
+    finalized = store.upload_and_finalize(reservation, video_path, user_id)
+
+    link_res = requests.post(
+        f"{worker_url}/sync/pc/media-link",
+        headers=_cloud_headers(worker_token, user_id),
+        json={"media_object_id": finalized.media_object_id, "local_clip_id": local_clip_id},
+        timeout=15,
+    )
+    if not link_res.ok:
+        raise RuntimeError(f"media-link failed ({link_res.status_code}): {link_res.text[:200]}")
+
+    report_render_complete_to_cloud(
+        local_clip_id,
+        str(result.get("render_fingerprint") or ""),
+        float(result.get("duration") or 0.0),
+        r2_key=finalized.final_key or None,
+        byte_count=finalized.byte_count or size,
+    )
+    return _clear_pending_pc_render(worker_url, worker_token, user_id, local_clip_id)
+
+
+def poll_pending_pc_renders(user_ids: Optional[List[str]] = None) -> int:
+    """Drain the pending PC render queue (spec Phase 4 dual render fallback).
+
+    A phone export requested while this PC was offline flags the clip in the
+    cloud; this poller picks it up every sync cycle, renders 1080p from the raw
+    source, uploads the final render to R2, links it to the cloud clip, reports
+    render-complete, and clears the flag — working even when the phone app is
+    closed. Returns the number of queue entries fully processed.
+    """
+    worker_token = get_worker_token()
+    if not worker_token:
+        return 0
+    worker_url = _worker_base()
+    targets = user_ids if user_ids is not None else _resolve_drain_user_ids()
+    if not targets:
+        return 0
+
+    completed = 0
+    for user_id in targets:
+        try:
+            res = requests.get(
+                f"{worker_url}/sync/pc/renders",
+                headers=_cloud_headers(worker_token, user_id),
+                timeout=15,
+            )
+            if not res.ok:
+                logger.warning("pending render list failed for %s: HTTP %s", user_id, res.status_code)
+                continue
+            items = (res.json() or {}).get("renders") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                local_clip_id = str(item.get("local_clip_id") or item.get("clip_id") or "")
+                if not local_clip_id:
+                    continue
+                try:
+                    if _execute_pending_pc_render(worker_url, worker_token, user_id, local_clip_id, item):
+                        completed += 1
+                except Exception as e:
+                    logger.error("pending PC render for %s failed (will retry next cycle): %s",
+                                 local_clip_id, e)
+        except Exception as e:
+            logger.error("poll_pending_pc_renders(%s) failed: %s", user_id, e)
+    return completed
+
+
 def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -> int:
     """Claim queued phone commands from Dispatch Cloud, apply them locally, and
     acknowledge. Runs every sync cycle and immediately at daemon startup; safe
@@ -1554,6 +1695,12 @@ def drain_clip_commands(limit: int = 25, user_ids: Optional[List[str]] = None) -
             import_cloud_timelines_for_clips([user_id])
         except Exception as e:
             logger.error("cloud timeline reconciliation for %s failed: %s", user_id, e)
+        # Queued full-HD renders (phone requested while the PC was offline) drain
+        # after the timeline reconciliation so the render sees the latest state.
+        try:
+            poll_pending_pc_renders([user_id])
+        except Exception as e:
+            logger.error("pending PC render poll for %s failed: %s", user_id, e)
         try:
             sync_cloud_template_for_user(worker_url, worker_token, user_id)
         except Exception as e:

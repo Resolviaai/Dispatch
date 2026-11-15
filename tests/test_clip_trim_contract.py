@@ -64,9 +64,11 @@ class TestClipTrimContract(unittest.TestCase):
             self.assertEqual(db.get_clip_by_id(clip_id)["render_stale"], 0)
 
             self.assertFalse(db.update_clip_trim(clip_id, -1, 100))
-            self.assertFalse(db.update_clip_trim(clip_id, 20, 201))
-            self.assertFalse(db.update_clip_trim(clip_id, 20, 205))
-            self.assertFalse(db.update_clip_trim(clip_id, 20, 200.1))
+            # Phase 1 removed the 180 s product cap (3600 s ceiling); with a
+            # 600 s source the binding constraint is the source duration.
+            self.assertTrue(db.update_clip_trim(clip_id, 20, 201))
+            self.assertTrue(db.update_clip_trim(clip_id, 20, 600))
+            self.assertFalse(db.update_clip_trim(clip_id, 20, 600.1))
             self.assertFalse(db.update_clip_trim(clip_id, 20, 24))
             self.assertFalse(db.update_clip_trim(clip_id, float("nan"), 200))
         finally:

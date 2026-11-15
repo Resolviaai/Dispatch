@@ -563,11 +563,15 @@ class AndroidClipRenderer(
             }
         }
 
+        private fun JsonObject?.optObject(key: String): JsonObject? = this?.get(key) as? JsonObject
+
         fun parseOverlayGroups(docObj: JsonObject): List<CaptionGroup> {
+            // getAsJsonObject throws ClassCastException on explicit JSON nulls
+            // (e.g. "active_word": null); overlay docs legitimately contain them.
             val groups = mutableListOf<CaptionGroup>()
             val tracks = docObj.getAsJsonArray("tracks") ?: return groups
             val docCoordSys = docObj.get("coordinate_system")?.asString
-            val timelineOrigin = docObj.getAsJsonObject("timeline")?.get("caption_source_origin")?.asFloat
+            val timelineOrigin = docObj.optObject("timeline")?.get("caption_source_origin")?.asFloat
 
             for (i in 0 until tracks.size()) {
                 val track = tracks.get(i).asJsonObject
@@ -576,9 +580,9 @@ class AndroidClipRenderer(
                 val isTextOrOverlay = (kind == "text" || kind == "overlay")
                 if (!isCaption && !isTextOrOverlay) continue
 
-                val defaultStyle = track.getAsJsonObject("default_style") ?: track.getAsJsonObject("style") ?: JsonObject()
-                val defaultLayout = track.getAsJsonObject("default_layout") ?: track.getAsJsonObject("layout") ?: JsonObject()
-                val trackAnim = track.getAsJsonObject("animation") ?: defaultStyle.getAsJsonObject("animation") ?: JsonObject()
+                val defaultStyle = track.optObject("default_style") ?: track.optObject("style") ?: JsonObject()
+                val defaultLayout = track.optObject("default_layout") ?: track.optObject("layout") ?: JsonObject()
+                val trackAnim = track.optObject("animation") ?: defaultStyle.optObject("animation") ?: JsonObject()
                 val trackCoordSys = track.get("coordinate_system")?.asString ?: docCoordSys ?: "clip_relative"
                 val trackOrigin = track.get("caption_source_origin")?.asFloat
                     ?: track.get("window_start")?.asFloat
@@ -613,9 +617,9 @@ class AndroidClipRenderer(
                     }
 
                     if (gEnd > gStart && words.isNotEmpty()) {
-                        val groupStyle = g.getAsJsonObject("style") ?: defaultStyle
-                        val groupLayout = g.getAsJsonObject("layout") ?: defaultLayout
-                        val groupAnim = g.getAsJsonObject("animation") ?: groupStyle.getAsJsonObject("animation") ?: trackAnim
+                        val groupStyle = g.optObject("style") ?: defaultStyle
+                        val groupLayout = g.optObject("layout") ?: defaultLayout
+                        val groupAnim = g.optObject("animation") ?: groupStyle.optObject("animation") ?: trackAnim
                         val groupCoordSys = g.get("coordinate_system")?.asString ?: trackCoordSys
                         val groupOrigin = g.get("caption_source_origin")?.asFloat ?: trackOrigin
 
@@ -686,8 +690,8 @@ class AndroidClipRenderer(
                         val backgroundPaddingY = groupStyle.get("background_padding_y")?.asFloat ?: defaultStyle.get("background_padding_y")?.asFloat ?: 16f
 
                         // Animation extraction (honors animation.mode == "none" and active_word.type)
-                        val trackActiveWordObj = trackAnim.getAsJsonObject("active_word")
-                        val activeWordObj = groupAnim.getAsJsonObject("active_word") ?: trackActiveWordObj
+                        val trackActiveWordObj = trackAnim.optObject("active_word")
+                        val activeWordObj = groupAnim.optObject("active_word") ?: trackActiveWordObj
                         val groupMode = groupAnim.get("mode")?.asString ?: trackAnim.get("mode")?.asString
                         val activeAnimType = when {
                             groupMode != null && groupMode.equals("none", ignoreCase = true) && activeWordObj == null -> "none"

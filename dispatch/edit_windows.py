@@ -244,6 +244,7 @@ def build_proxy_cmd(
         "-r", str(PROXY_FPS),
         "-c:v", "libx264", "-preset", "veryfast", "-b:v", PROXY_VIDEO_BITRATE,
         "-c:a", "aac", "-b:a", "128k",
+        "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
         out_path,
     ]
@@ -347,8 +348,9 @@ def stage_edit_window(
             if ares.returncode != 0:
                 raise RuntimeError("audio extraction failed")
             words_raw = transcribe_fn(audio, max_input_seconds=MAX_WINDOW_TRANSCRIBE_SECONDS)
-            words = [{"word": w.get("word", ""), "start": round(window_start + float(w.get("start", 0.0)), 3),
-                      "end": round(window_start + float(w.get("end", 0.0)), 3)}
+            # The Temporary Edit Window IS the Master File: zeroed time base at 0.000.
+            words = [{"word": w.get("word", ""), "start": round(float(w.get("start", 0.0)), 3),
+                      "end": round(float(w.get("end", 0.0)), 3)}
                      for w in words_raw.get("words", [])]
             db_ops.put_transcript(window_id, user_id, words)
 
@@ -358,7 +360,7 @@ def stage_edit_window(
             reservation = media_store.reserve_upload(
                 user_id=user_id, object_kind="edit_window", mime_type="video/mp4",
                 expected_bytes=size, local_clip_id=clip_id)
-            object_id = media_store.upload_and_finalize(reservation, proxy, user_id)
+            object_id = media_store.upload_and_finalize(reservation, proxy, user_id).media_object_id
             db_ops.mark_ready(window_id, object_id)
             return {"window_id": window_id, "status": "ready",
                     "window_start": window_start, "window_end": window_end,

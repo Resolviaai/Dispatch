@@ -54,6 +54,7 @@ def evaluate_upload_reservation(
     max_clip_object_bytes: int,
     max_thumbnail_bytes: int,
     max_outstanding_uploads_per_user: int,
+    bypass_workstation_quota: bool = False,
 ) -> QuotaDecision:
     """Decide whether one upload reservation may be issued.
 
@@ -61,6 +62,9 @@ def evaluate_upload_reservation(
     completion (plan doc D5). Concurrent requests are serialized by the database
     transaction that computes `usage` and inserts the reservation row together.
     """
+    import os
+    if bypass_workstation_quota or os.getenv("DISPATCH_WORKSTATION_BYPASS_QUOTA", "0") == "1":
+        return QuotaDecision(True, "ok")
     if object_kind not in ALLOWED_MIME_TYPES:
         return QuotaDecision(False, f"Unsupported object kind: {object_kind!r}")
     if mime_type not in ALLOWED_MIME_TYPES[object_kind]:

@@ -3,6 +3,7 @@
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from dispatch import edit_windows as ew
@@ -118,7 +119,7 @@ class FakeMediaStore:
 
     def upload_and_finalize(self, reservation, path, user_id):
         self.uploaded = (reservation.reservation_id, path, user_id)
-        return "obj-1"
+        return SimpleNamespace(media_object_id="obj-1", final_key="windows/obj-1.mp4", byte_count=123)
 
 
 class FakeDb:

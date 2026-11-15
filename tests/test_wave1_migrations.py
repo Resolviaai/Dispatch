@@ -262,7 +262,7 @@ class TestWave1MigrationsStatic(unittest.TestCase):
         self.assertTrue(REPAIR_MIGRATION.is_file())
         self.assertGreaterEqual(len(MIGRATIONS), 31)
         names = [p.name for p in MIGRATIONS]
-        self.assertEqual(names[-1], "20261113000032_wave2b_straggler.sql")
+        self.assertEqual(names[-1], "20261114000033_pending_pc_render.sql")
 
     def test_9_1_cloud_quota_usage_filters_expired_reservations(self):
         m = re.search(

@@ -1,7 +1,5 @@
 package com.resolvia.dispatch.bridge
 
-
-
 import android.content.Intent
 
 import android.net.Uri
@@ -69,6 +67,27 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 import java.util.concurrent.TimeUnit
+
+
+
+/**
+
+ * Resolves the WebView's render source marker to an absolute path.
+
+ * `full_proxies/{clipId}.mp4` refers to the Phase 3 full-source proxy cached
+
+ * under the app's cacheDir; absolute paths pass through untouched.
+
+ */
+
+internal fun resolveRenderSourcePath(rawPath: String, cacheDir: java.io.File): String {
+    val trimmed = rawPath.trim()
+    if (trimmed.isEmpty() || trimmed.startsWith("/")) return trimmed
+    if (trimmed.startsWith("full_proxies/")) {
+        return java.io.File(cacheDir, trimmed).absolutePath
+    }
+    return trimmed
+}
 
 
 
@@ -2874,7 +2893,10 @@ com.resolvia.dispatch.media.RecordingHttpServer.ensureStarted(activity)
             val clipId = json.get("clip_id")?.asString ?: java.util.UUID.randomUUID().toString()
             val jobId = "render_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}"
             val projectDocJson = json.get("project_document")?.toString() ?: "{}"
-            val sourceVideoPath = json.get("source_video_path")?.asString ?: ""
+            val sourceVideoPath = resolveRenderSourcePath(
+                json.get("source_video_path")?.asString ?: "",
+                activity.cacheDir
+            )
             val layoutMode = json.get("layout_mode")?.asString ?: "portrait_9_16"
             val cropAnchorX = json.get("crop_anchor_x")?.asFloat ?: 0.5f
             val targetRes = json.get("target_resolution")?.asString ?: "1080p"

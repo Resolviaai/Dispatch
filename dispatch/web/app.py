@@ -1626,45 +1626,13 @@ def _generate_full_proxy(clip_id: str, source_path: Path) -> None:
 
 @app.api_route("/api/clips/{clip_id}/full-proxy", methods=["GET", "HEAD"])
 def get_clip_full_proxy(clip_id: str, request: Request):
-    """Faststart 720p proxy of the ENTIRE canonical raw source, generated on demand
-    and cached on the PC. Served with HTTP Range (206) for smooth scrubbing and
-    X-Source-Duration for the client's full-source timebase switch. Local cache
-    artifact only — never staged to R2 or quota-counted. 202 while generating."""
-    clip, _effective_user_id = _load_clip_for_source_media(clip_id, request)
-    source_path = resolve_canonical_source_asset(clip)
-    if not source_path or not source_path.exists():
-        raise HTTPException(status_code=404, detail="Source media not found on disk")
-    resolved_source = source_path.resolve()
-
-    meta = _valid_full_proxy_cache(clip_id, resolved_source)
-    if meta is None:
-        with _FULL_PROXY_LOCKS_GUARD:
-            already = clip_id in _FULL_PROXY_GENERATING
-            if not already:
-                _FULL_PROXY_GENERATING.add(clip_id)
-        if not already:
-            threading.Thread(
-                target=_generate_full_proxy, args=(clip_id, resolved_source),
-                name=f"full-proxy-{clip_id[:8]}", daemon=True,
-            ).start()
-        return JSONResponse(status_code=202, content={"status": "generating"})
-
-    mp4, _meta_path = _full_proxy_paths(clip_id)
-    st = mp4.stat()
-    mtime = int(st.st_mtime)
-    etag = f'"{mtime}-{st.st_size}"'
-    headers = {
-        "Accept-Ranges": "bytes",
-        "X-Source-Duration": f"{float(meta['duration']):.3f}",
-        "ETag": etag,
-        "Last-Modified": email.utils.formatdate(mtime, usegmt=True),
-        "Cache-Control": "private, max-age=3600",
-    }
-    if not request.headers.get("range") and request.method in ("GET", "HEAD"):
-        if_none_match = request.headers.get("if-none-match")
-        if if_none_match and if_none_match.strip() in (etag, f"W/{etag}", "*"):
-            return Response(status_code=304, headers=headers)
-    return FileResponse(path=str(mp4), media_type="video/mp4", headers=headers)
+    """Strict 2-window architecture: The Temporary Edit Window IS the Master File.
+    Full raw master streaming fallback is suppressed to prevent coordinate drift,
+    subtitle desync, and memory exhaustion. Callers operate strictly on the bounded edit window."""
+    raise HTTPException(
+        status_code=410,
+        detail="Full raw master proxy streaming is suppressed. The Temporary Edit Window is the canonical master file."
+    )
 
 
 class TranscribeRangeRequest(BaseModel):
@@ -2198,12 +2166,9 @@ async def get_autocut_proposals(clip_id: str, request: Request):
             try:
                 parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
                 groups = parsed.get("groups") or []
-                coord_sys = str(parsed.get("coordinate_system") or "").strip().lower()
-                max_group_end = max((float(g.get("end", 0.0)) for g in groups), default=0.0)
                 clip_dur = max(0.0, clip_end - clip_start)
-                if coord_sys == "source_relative":
-                    shift = 0.0
-                elif clip_start > 0.01 and groups and max_group_end <= (clip_dur + 1.0):
+                # Suppress multi-coordinate switching: treat edit window / clip as canonical 0.000 time base
+                if clip_start > 0.01 and groups and max_group_end <= (clip_dur + 1.0):
                     shift = clip_start
                 else:
                     shift = 0.0

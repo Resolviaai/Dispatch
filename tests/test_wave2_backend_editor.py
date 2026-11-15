@@ -393,7 +393,8 @@ class TestWave2BackendEditor(unittest.TestCase):
 
         fake_store = MagicMock()
         fake_store.reserve_upload.return_value = SimpleNamespace(reservation_id="r1", media_object_id="mo_port")
-        fake_store.upload_and_finalize.return_value = "mo_port"
+        fake_store.upload_and_finalize.return_value = SimpleNamespace(
+            media_object_id="mo_port", final_key="windows/mo_port.mp4", byte_count=4321)
         fake_db = MagicMock()
         fake_db.create_window.return_value = "ew_port_1"
 

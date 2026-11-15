@@ -6104,6 +6104,44 @@ export default {
         return json(200, { superseded: true, windows_considered: Array.isArray(windows) ? windows.length : 0, reclaimed });
       }
 
+      // Phase 4 dual render fallback: queue a full-HD render on the headless PC.
+      // Saves the latest timeline first (optional body flush) so the PC renders
+      // the exact state the editor showed, then flags the clip via RPC.
+      const requestPcRenderMatch = url.pathname.match(/^\/clips\/([^/]+)\/request-pc-render$/);
+      if (request.method === "POST" && requestPcRenderMatch) {
+        const localClipId = decodeURIComponent(requestPcRenderMatch[1]).slice(0, 128);
+        if (!localClipId) return json(400, { error: "invalid clip id" });
+        const svc = { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` };
+        try {
+          const clipRes = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&or=(local_clip_id.eq.${encodeURIComponent(localClipId)},id.eq.${encodeURIComponent(localClipId)})&select=id,local_clip_id&limit=1`,
+            { headers: svc });
+          const clipRows = clipRes.ok ? (await clipRes.json() as Array<{ id: string; local_clip_id: string }>) : [];
+          const clip = clipRows[0];
+          if (!clip) return json(404, { error: "clip not found" });
+
+          const body = await readJson<{ project_document?: Record<string, unknown> }>(request).catch(() => ({ project_document: undefined }));
+          if (body?.project_document && typeof body.project_document === "object") {
+            const docRes = await fetch(`${env.SUPABASE_URL}/rest/v1/clips_cloud?id=eq.${clip.id}`, {
+              method: "PATCH",
+              headers: { ...svc, "Content-Type": "application/json" },
+              body: JSON.stringify({ project_document: body.project_document, cloud_updated_at: new Date().toISOString() }),
+            });
+            if (!docRes.ok) return json(502, { error: `timeline save failed: ${docRes.status}` });
+          }
+
+          const rpcRes = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_request_pc_render`, {
+            method: "POST",
+            headers: { ...svc, "Content-Type": "application/json" },
+            body: JSON.stringify({ p_user_id: userId, p_local_clip_id: clip.local_clip_id }),
+          });
+          if (!rpcRes.ok) return json(502, { error: `render request failed: ${rpcRes.status}` });
+          return json(200, { queued: true });
+        } catch (e) {
+          return json(502, { error: `render request failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
             // Project Document Timeline Editing (Stage 2 Mobile Endpoints):
       // Single authoritative document, CAS optimistic concurrency, and persistent undo/redo.
       if (request.method === "GET" && url.pathname.startsWith("/clips/") && url.pathname.endsWith("/timeline")) {
@@ -7382,6 +7420,45 @@ export default {
           return json(200, { status: "ok", timelines, clips: timelines });
         } catch (e) {
           return json(502, { error: `timeline sync failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      // Phase 4 dual render fallback: PC claim/complete for the pending render queue.
+      if (request.method === "GET" && url.pathname === "/sync/pc/renders") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        try {
+          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/cloud_list_pending_pc_renders`, {
+            method: "POST",
+            headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ p_user_id: userId }),
+          });
+          if (!res.ok) return json(502, { error: `pending render list failed: ${res.status}` });
+          const rows = (await res.json()) as Array<Record<string, unknown>>;
+          const renders = (Array.isArray(rows) ? rows : []).map((r) => ({ ...r, clip_id: r.local_clip_id }));
+          return json(200, { status: "ok", renders });
+        } catch (e) {
+          return json(502, { error: `pending render list failed: ${e instanceof Error ? e.message : e}` });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/sync/pc/renders/complete") {
+        if (!isPcWorkerAuth(env, request)) return json(403, { error: "PC worker auth required" });
+        const body = await readJson<{ local_clip_id?: string; clip_id?: string }>(request);
+        const localClipId = String(body?.local_clip_id ?? body?.clip_id ?? "").slice(0, 128);
+        if (!localClipId) return json(400, { error: "local_clip_id required" });
+        try {
+          const res = await fetch(
+            `${env.SUPABASE_URL}/rest/v1/clips_cloud?user_id=eq.${userId}&local_clip_id=eq.${encodeURIComponent(localClipId)}`,
+            {
+              method: "PATCH",
+              headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify({ pending_pc_render: false, cloud_updated_at: new Date().toISOString() }),
+            }
+          );
+          if (!res.ok) return json(502, { error: `render flag clear failed: ${res.status}` });
+          return json(200, { cleared: true });
+        } catch (e) {
+          return json(502, { error: `render flag clear failed: ${e instanceof Error ? e.message : e}` });
         }
       }
 
