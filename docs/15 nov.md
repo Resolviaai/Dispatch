@@ -183,3 +183,5 @@ Every change must strictly obey the repository-wide frontend constitution (`desi
 | **2026-11-15 12:10** | SemVer Bump & Asset Compilation | `android/app/build.gradle.kts`, `frontend/package.json`, `README.md`, `site/update.json` | Bumped to `v1.7.50` (`versionCode = 118`); frontend rebuilt to `android/app/src/main/assets/web/`. |
 | **2026-11-15 12:16** | Release Assembly & Verification | `scripts/prepare_release.ps1` | `Dispatch.apk` generated (26,694,638 bytes, SHA-256 `4c2931ba83e1e19fb9299e3b60a367a4684354cbf5bb52c9dec86571c02d60d7`); verified signature `...3804`. |
 | **2026-11-15 12:18** | Release Artifact Synchronization | `site/update.json` | Updated in-app update descriptor with verified SHA-256 and byte size. |
+| **2026-11-15 12:21** | Remote Push & Tag Publishing | `origin/main`, `v1.7.50-alpha` | Pushed commits and tag `v1.7.50-alpha` to GitHub remote `Resolviaai/Dispatch`. |
+| **2026-11-15 12:22** | GitHub Pages Deployment | `scripts/deploy_gh_pages.ps1` | Deployed `Dispatch.apk` and `update.json` to `gh-pages` branch; live at `https://resolviaai.github.io/Dispatch/`. |
