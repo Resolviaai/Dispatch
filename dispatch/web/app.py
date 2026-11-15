@@ -2167,6 +2167,7 @@ async def get_autocut_proposals(clip_id: str, request: Request):
                 parsed = json.loads(cap_data) if isinstance(cap_data, str) else cap_data
                 groups = parsed.get("groups") or []
                 clip_dur = max(0.0, clip_end - clip_start)
+                max_group_end = max((float(g.get("end") or 0.0) for g in groups), default=0.0)
                 # Suppress multi-coordinate switching: treat edit window / clip as canonical 0.000 time base
                 if clip_start > 0.01 and groups and max_group_end <= (clip_dur + 1.0):
                     shift = clip_start

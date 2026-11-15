@@ -1463,6 +1463,13 @@ export const FramedVideoStage = React.memo<FramedVideoStageProps>(({
         onClick={(e) => {
           e.stopPropagation();
           if (isCrop) return;
+          const target = e.target as HTMLElement;
+          const isDirectVideo = target.tagName === 'VIDEO' || Boolean(target.closest('video'));
+          const isCaptionLayer = Boolean(target.closest('[data-layer-block="true"], [data-caption-container="true"], button'));
+          if (!isDirectVideo && !isCaptionLayer) {
+            onStageBackgroundClick?.();
+            return;
+          }
           if (onVideoClick) {
             onVideoClick();
           } else {
@@ -3421,17 +3428,25 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
     if (previewAnimRef.current?.active) {
       previewAnimRef.current = null;
     }
-    const safeTarget = clamp(targetSec, 0, clipDuration);
+    const maxLeadIn = proxyWindowStart > 0 ? Math.max(0, clipStart - proxyWindowStart) : 0;
+    const maxLeadOut = proxyWindowEnd > clipEnd ? Math.max(0, proxyWindowEnd - clipEnd) : 0;
+    const safeTarget = clamp(targetSec, -maxLeadIn, clipDuration + maxLeadOut);
     lastTimeUpdateRef.current = safeTarget;
     setCurrentTime(safeTarget);
     const video = videoRef.current;
     const effectiveSource = isSourceTimebase;
     let actualTarget: number;
     if (effectiveSource) {
-      try {
-        actualTarget = concatToSource(effectiveRanges, safeTarget, totalSourceDur);
-      } catch {
+      if (safeTarget < 0) {
         actualTarget = clipStart + safeTarget;
+      } else if (safeTarget > clipDuration) {
+        actualTarget = clipEnd + (safeTarget - clipDuration);
+      } else {
+        try {
+          actualTarget = concatToSource(effectiveRanges, safeTarget, totalSourceDur);
+        } catch {
+          actualTarget = clipStart + safeTarget;
+        }
       }
     } else {
       actualTarget = safeTarget;
@@ -3709,7 +3724,20 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       }
 
       // 1. End-of-clip boundary: stop and reset to start of first piece
-      if (curSrc >= lastPieceEnd - 0.005) {
+      const isAuditioningLeadOut = curSrc > lastPieceEnd;
+      if (!isAuditioningLeadOut && curSrc >= lastPieceEnd - 0.005) {
+        video.pause();
+        video.currentTime = sourceToMediaTime(firstPieceStart);
+        if (bgVideoRef.current) {
+          bgVideoRef.current.pause();
+          bgVideoRef.current.currentTime = sourceToMediaTime(firstPieceStart);
+        }
+        setIsPlaying(false);
+        lastTimeUpdateRef.current = 0;
+        setCurrentTime(0);
+        return;
+      }
+      if (isAuditioningLeadOut && curSrc >= (proxyWindowEnd > lastPieceEnd ? proxyWindowEnd : lastPieceEnd) - 0.005) {
         video.pause();
         video.currentTime = sourceToMediaTime(firstPieceStart);
         if (bgVideoRef.current) {
@@ -3722,8 +3750,9 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
         return;
       }
 
-      // 2. Pre-clip underflow: reset to start of first piece
-      if (curSrc < firstPieceStart - 0.2) {
+      // 2. Pre-clip underflow: reset to start of first piece only if outside valid window
+      const validMediaStart = proxyWindowStart > 0 ? proxyWindowStart : firstPieceStart;
+      if (curSrc < validMediaStart - 0.2) {
         video.currentTime = sourceToMediaTime(firstPieceStart);
         if (bgVideoRef.current) bgVideoRef.current.currentTime = sourceToMediaTime(firstPieceStart);
         lastTimeUpdateRef.current = 0;
@@ -3753,7 +3782,14 @@ export const ClipsScreen: React.FC<ClipsScreenProps> = ({
       if (jumpedGap) return;
 
       // 4. In-piece presentation time progression
-      const concatTime = sourceToConcat(effectiveRanges, curSrc, totalSourceDur);
+      let concatTime: number | null = null;
+      if (curSrc < firstPieceStart) {
+        concatTime = roundMs(curSrc - firstPieceStart);
+      } else if (curSrc > lastPieceEnd) {
+        concatTime = roundMs(clipDuration + (curSrc - lastPieceEnd));
+      } else {
+        concatTime = sourceToConcat(effectiveRanges, curSrc, totalSourceDur);
+      }
       if (concatTime !== null) {
         if (showAutoCutDrawer || Math.abs(concatTime - lastTimeUpdateRef.current) >= 0.08 || concatTime <= 0.05) {
           lastTimeUpdateRef.current = concatTime;
@@ -7186,6 +7222,7 @@ async function detectSubjectCropAnchorFromVideo(video: HTMLVideoElement): Promis
                 setShowAutoCutDrawer(false);
               } else {
                 handleClearSelection();
+                handleSeek(0);
               }
             }}
             onVideoClick={() => {

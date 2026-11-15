@@ -305,8 +305,8 @@ const DetectionCard: React.FC<DetectionCardProps> = React.memo(
               </span>
             </div>
             <span className="text-[11px] font-mono tabular-nums text-text-muted">
-              {formatCutTimestamp(proposal.source_start)} &ndash;{' '}
-              {formatCutTimestamp(proposal.source_end)}
+              {formatCutTimestamp(clipStart > 0 && proposal.source_start >= clipStart ? proposal.source_start - clipStart : proposal.source_start)} &ndash;{' '}
+              {formatCutTimestamp(clipStart > 0 && proposal.source_end >= clipStart ? proposal.source_end - clipStart : proposal.source_end)}
             </span>
           </div>
 

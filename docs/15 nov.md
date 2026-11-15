@@ -26,8 +26,8 @@ The start of the temporary edit window proxy is strictly treated as `0.000`. All
 
 | Component | Target / Specification | Current Live State |
 | :--- | :--- | :--- |
-| **Android Package** | `com.resolvia.dispatch` | Version `1.7.50` (`versionCode = 118`) |
-| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.50-alpha` |
+| **Android Package** | `com.resolvia.dispatch` | Version `1.7.51` (`versionCode = 119`) |
+| **Release Tag** | Monotonic SemVer Git Tag | `v1.7.51-alpha` |
 | **Release Certificate** | Trusted keystore | SHA-256 fingerprint ends in `...3804` |
 | **Release Distribution** | GitHub Releases & `gh-pages` | Hosted at `https://resolviaai.github.io/Dispatch/` |
 | **PC Daemon API** | FastAPI / SQLite / Gemini Transcribe & Flash Lite / FFmpeg | `http://127.0.0.1:8000` |
@@ -186,3 +186,7 @@ Every change must strictly obey the repository-wide frontend constitution (`desi
 | **2026-11-15 12:21** | Remote Push & Tag Publishing | `origin/main`, `v1.7.50-alpha` | Pushed commits and tag `v1.7.50-alpha` to GitHub remote `Resolviaai/Dispatch`. |
 | **2026-11-15 12:22** | GitHub Pages Deployment | `scripts/deploy_gh_pages.ps1` | Deployed `Dispatch.apk` and `update.json` to `gh-pages` branch; live at `https://resolviaai.github.io/Dispatch/`. |
 | **2026-11-15 12:33** | Emulator App Update | `emulator-5554`, `adb install -r` | Installed `v1.7.50` (`versionCode = 118`) onto `emulator-5554`; verified launch and active `MainActivity` focus without errors. |
+| **2026-11-15 13:20** | Timeline Bounded Edit Window & Context Padding | `frontend/src/captions/CaptionTimeline.tsx`, `frontend/src/screens/ClipsScreen.tsx` | Enforced bounded 5-minute ($\le 300\text{s}$) edit window hull; active clip starts strictly at $00:00$ on ruler; context padding rendered with 30% faded filmstrip, dark scrim, and no confusing timestamps. |
+| **2026-11-15 13:25** | Trimming, Auditioning & Empty-Space Snap | `frontend/src/captions/CaptionTimeline.tsx`, `frontend/src/screens/ClipsScreen.tsx` | Dragging left trim lever expands clip down to window start with live bright frame revelation; playhead scrub into padding auditions lead-in/lead-out audio/video; tapping empty preview stage snaps playhead to $00:00$. |
+| **2026-11-15 13:30** | Auto-Cut (Speech Cleanup) Audit & Fix | `dispatch/web/app.py`, `frontend/src/captions/SpeechCleanupWorkspace.tsx` | Fixed `max_group_end` NameError in `/api/clips/{id}/autocut/proposals`; formatted proposal cards relative to active clip start; verified all 21 AutoCut tests and 14 waveform autocut tests passing 100%. |
+| **2026-11-15 13:35** | SemVer Bump to v1.7.51 (Code 119) & Verified Release Build | `android/app/build.gradle.kts`, `frontend/package.json`, `site/update.json`, `README.md` | Built and signed `Dispatch.apk` (26,695,571 bytes, cert SHA-256 `...3804`); deployed to `emulator-5554`; verified live playback, karaoke words tracking, and zero 4-minute ruler gap. |

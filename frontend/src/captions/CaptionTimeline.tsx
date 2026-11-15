@@ -310,15 +310,27 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const effectiveTimeMode: TimelineTimeMode = timeMode ?? (sourceTimebase && (sourceDuration ?? 0) > duration + 2.0 ? 'source' : 'clip');
   const isSourceMode = effectiveTimeMode === 'source';
 
+  // Bounded Edit Window Origin and Bounds (Max 5 minutes / 300s):
+  // When paddedStart and paddedEnd are provided (or sourceTimebase is active in editor),
+  // the timeline strictly spans the bounded edit window [windowStart, windowEnd], NOT the full 2-hour master video!
+  const hasWindowPadding = Boolean(
+    paddedStart !== undefined && paddedEnd !== undefined && paddedEnd > paddedStart
+  );
+
+  const windowStart = (paddedStart !== undefined && paddedStart >= 0)
+    ? paddedStart
+    : Math.max(0, clipStart - 60.0);
+  const windowEnd = (paddedEnd !== undefined && paddedEnd > windowStart)
+    ? paddedEnd
+    : Math.min((sourceDuration && sourceDuration > 0 ? sourceDuration : clipStart + duration + 60.0), (clipEnd ?? (clipStart + duration)) + 60.0);
+  const windowSpan = Math.max(duration, windowEnd - windowStart);
+
   const piecesFallbackEnd = (segments && segments.length > 0)
     ? segments.reduce((max: number, s: any) => Math.max(max, Number(s.end ?? s.source_end ?? 0)), 0)
     : (clipEnd ?? (clipStart + duration));
 
   // Clip/presentation timebase: the ruler length is the KEPT duration (sum of
-  // segment spans), never the outer source-time hull. A [120,150]s source
-  // segment is a 30s clip — using max(piece.end) inflated the ruler to 150s.
-  // Source mode keeps the max(piece.end) hull so pieces laid out at their
-  // source coordinates still fit the visible timeline.
+  // segment spans), never the outer source-time hull.
   const piecesKeptDuration = (segments && segments.length > 0)
     ? segments.reduce((sum: number, s: any) => {
         const pieceStart = Number(s.start ?? s.source_start ?? 0);
@@ -331,9 +343,12 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     ? Math.max(1, duration, piecesFallbackEnd)
     : Math.max(1, duration, piecesKeptDuration);
 
-  const timelineDuration = isSourceMode
-    ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd, paddedEnd || 0)
-    : safeClipDuration;
+  // If hasWindowPadding, timeline duration strictly equals windowSpan (<= 300s)
+  const timelineDuration = hasWindowPadding
+    ? windowSpan
+    : (isSourceMode
+      ? Math.max(safeClipDuration, sourceDuration || 0, piecesFallbackEnd, paddedEnd || 0)
+      : safeClipDuration);
 
   // Split group handler & keyboard shortcut
   const selectedGroup = track?.groups?.find((g) => g.id === selectedGroupId);
@@ -384,14 +399,6 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
     return pieces.map((p) => [p.start, p.end]);
   }, [pieces]);
 
-  const timelineCurrentTime = isSourceMode
-    ? clipTimeToSourceTime(currentTime, clipStart, pieceRanges, sourceDuration)
-    : currentTime;
-
-  const piecesMaxEnd = useMemo(() => {
-    return pieces.reduce((max, p) => Math.max(max, p.end), 0);
-  }, [pieces]);
-
   interface PieceTrimDragState {
     pieceIndex: number;
     side: 'start' | 'end';
@@ -406,6 +413,30 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
   const [pieceTrimDrag, setPieceTrimDrag] = useState<PieceTrimDragState | null>(null);
   const pieceTrimDragRef = useRef<PieceTrimDragState | null>(null);
   pieceTrimDragRef.current = pieceTrimDrag;
+
+  const firstPieceStart = pieces[0]?.start ?? clipStart;
+  const lastPieceEnd = pieces[pieces.length - 1]?.end ?? (clipEnd ?? (clipStart + duration));
+
+  const activeStart = pieceTrimDrag && pieceTrimDrag.pieceIndex === 0 && pieceTrimDrag.side === 'start'
+    ? pieceTrimDrag.currentStart
+    : firstPieceStart;
+  const activeEnd = pieceTrimDrag && pieceTrimDrag.pieceIndex === pieces.length - 1 && pieceTrimDrag.side === 'end'
+    ? pieceTrimDrag.currentEnd
+    : lastPieceEnd;
+
+  const leftPaddingDur = hasWindowPadding ? Math.max(0, activeStart - windowStart) : 0;
+  const activeDur = Math.max(0.1, activeEnd - activeStart);
+  const rightPaddingDur = hasWindowPadding ? Math.max(0, windowEnd - activeEnd) : 0;
+
+  const timelineCurrentTime = hasWindowPadding
+    ? Math.max(0, Math.min(windowSpan, leftPaddingDur + currentTime))
+    : (isSourceMode
+      ? clipTimeToSourceTime(currentTime, clipStart, pieceRanges, sourceDuration)
+      : currentTime);
+
+  const piecesMaxEnd = useMemo(() => {
+    return pieces.reduce((max, p) => Math.max(max, p.end), 0);
+  }, [pieces]);
 
   // Trim boundaries and the filmstrip use source time. Caption words stay clip-relative.
 
@@ -703,11 +734,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const v = mediaElementRef.current;
 
-      const effectiveTarget = isSourceMode
-
-        ? (clipStart + timeSec)
-
-        : timeSec;
+      const effectiveTarget = hasWindowPadding
+        ? Math.max(0, Math.min(windowSpan, leftPaddingDur + timeSec))
+        : (isSourceMode ? (clipStart + timeSec) : timeSec);
 
       try {
 
@@ -781,7 +810,9 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       if (pendingSeekTimeRef.current !== null) {
 
-        const effective = isSourceMode ? (clipStart + pendingSeekTimeRef.current) : pendingSeekTimeRef.current;
+        const effective = hasWindowPadding
+          ? (leftPaddingDur + pendingSeekTimeRef.current)
+          : (isSourceMode ? (clipStart + pendingSeekTimeRef.current) : pendingSeekTimeRef.current);
 
         if (Math.abs(v.currentTime - effective) > 0.05 && !v.seeking) {
 
@@ -801,7 +832,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     return () => v.removeEventListener('seeked', handleSeeked);
 
-  }, [mediaElementRef, isSourceMode, clipStart]);
+  }, [mediaElementRef, isSourceMode, hasWindowPadding, leftPaddingDur, clipStart]);
 
 
 
@@ -1093,11 +1124,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const scrubTime = clamp(sl / pxPerSec, 0, safeDuration);
 
-      const clipTime = isSourceMode
-
-        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
-
-        : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
+      const clipTime = hasWindowPadding
+        ? Number((scrubTime - leftPaddingDur).toFixed(2))
+        : (isSourceMode
+          ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
+          : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2)));
 
       scheduleSeek(clipTime);
 
@@ -1249,11 +1280,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
       const scrubTime = clamp(targetScroll / pxPerSec, 0, safeDuration);
 
-      const clipSeekTime = isSourceMode
-
-        ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
-
-        : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2));
+      const clipSeekTime = hasWindowPadding
+        ? Number((scrubTime - leftPaddingDur).toFixed(2))
+        : (isSourceMode
+          ? Number(sourceTimeToClipTime(scrubTime, clipStart, safeClipDuration, pieceRanges, sourceDuration).toFixed(2))
+          : Number(clamp(scrubTime, 0, safeClipDuration).toFixed(2)));
 
       scheduleSeek(clipSeekTime);
 
@@ -2118,7 +2149,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     if (drag.side === 'start') {
       const rawStart = drag.origStart + deltaTime;
-      const minBound = drag.pieceIndex > 0 ? pieces[drag.pieceIndex - 1].end : 0;
+      const minBound = drag.pieceIndex > 0 ? pieces[drag.pieceIndex - 1].end : (hasWindowPadding ? windowStart : 0);
       const maxBound = drag.origEnd - MIN_PIECE_DURATION;
       newStart = clamp(rawStart, minBound, maxBound);
     } else {
@@ -2126,7 +2157,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
       const minBound = drag.origStart + MIN_PIECE_DURATION;
       const maxBound = drag.pieceIndex < pieces.length - 1
         ? pieces[drag.pieceIndex + 1].start
-        : ((sourceDuration && sourceDuration > 0) ? sourceDuration : Infinity);
+        : (hasWindowPadding ? windowEnd : ((sourceDuration && sourceDuration > 0) ? sourceDuration : Infinity));
       newEnd = clamp(rawEnd, minBound, maxBound);
     }
 
@@ -2150,7 +2181,11 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
     // Live scrub preview to trimmed edge
     const sourceSeek = drag.side === 'start' ? newStart : newEnd;
-    scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration, pieceRanges, sourceDuration));
+    if (hasWindowPadding) {
+      scheduleSeek(sourceSeek - activeStart);
+    } else {
+      scheduleSeek(sourceTimeToClipTime(sourceSeek, clipStart, safeClipDuration, pieceRanges, sourceDuration));
+    }
   };
 
   const handlePieceTrimPointerUp = async (e: React.PointerEvent) => {
@@ -2613,29 +2648,26 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
             >
 
-              {rulerTicks.map((t) => (
-
-                <div
-
-                  key={t}
-
-                  className="absolute top-0 bottom-0 flex flex-col items-center -translate-x-1/2"
-
-                  style={{ left: `${t * pxPerSec}px` }}
-
-                >
-
-                  <span className="text-[9px] font-mono tabular-nums text-text-secondary font-medium mt-0.5">
-
-                    {formatTimeRuler(t)}
-
-                  </span>
-
-                  <div className="w-[1px] h-1.5 bg-[#3A4350]" />
-
-                </div>
-
-              ))}
+              {rulerTicks.map((t) => {
+                const isInActiveClip = hasWindowPadding
+                  ? (t >= leftPaddingDur - 0.05 && t <= (leftPaddingDur + activeDur) + 0.05)
+                  : true;
+                const activeSec = hasWindowPadding ? (t - leftPaddingDur) : t;
+                return (
+                  <div
+                    key={t}
+                    className="absolute top-0 bottom-0 flex flex-col items-center -translate-x-1/2"
+                    style={{ left: `${t * pxPerSec}px` }}
+                  >
+                    {isInActiveClip ? (
+                      <span className="text-[9px] font-mono tabular-nums text-white font-medium mt-0.5">
+                        {formatTimeRuler(activeSec)}
+                      </span>
+                    ) : null}
+                    <div className={`w-[1px] ${isInActiveClip ? 'h-2 bg-white/70' : 'h-1 bg-[#3A4350]/40'}`} />
+                  </div>
+                );
+              })}
 
             </div>
 
@@ -2743,19 +2775,18 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
               >
 
-                {rulerTicks.map((t) => (
-
-                  <div
-
-                    key={`grid_${t}`}
-
-                    className="absolute top-0 bottom-0 w-[1px] bg-[#1A1F26]"
-
-                    style={{ left: `${t * pxPerSec}px` }}
-
-                  />
-
-                ))}
+                {rulerTicks.map((t) => {
+                  const isInActive = hasWindowPadding
+                    ? (t >= leftPaddingDur - 0.05 && t <= (leftPaddingDur + activeDur) + 0.05)
+                    : true;
+                  return (
+                    <div
+                      key={`grid_${t}`}
+                      className={`absolute top-0 bottom-0 w-[1px] ${isInActive ? 'bg-[#1A1F26]' : 'bg-[#14181E]/40'}`}
+                      style={{ left: `${t * pxPerSec}px` }}
+                    />
+                  );
+                })}
 
               </div>
 
@@ -2811,6 +2842,38 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
                       </div>
                     )}
 
+                    {/* Bounded Edit Window Left Padding Block (faded lead-in context) */}
+                    {hasWindowPadding && leftPaddingDur > 0.05 && (
+                      <div
+                        className="absolute top-0 bottom-0 left-0 overflow-hidden cursor-pointer select-none rounded-l-md border-r border-[#2E3542]/70 bg-[#090C0F]/90 z-10 group"
+                        style={{
+                          width: `${Math.round(leftPaddingDur * pxPerSec)}px`,
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const clickX = e.clientX - rect.left;
+                          const clickSec = clickX / pxPerSec;
+                          scheduleSeek(Number((clickSec - leftPaddingDur).toFixed(2)));
+                        }}
+                        title={`Lead-in context padding (-${leftPaddingDur.toFixed(1)}s)`}
+                      >
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none select-none opacity-30 brightness-75"
+                          style={{
+                            left: '0px',
+                            width: `${totalTimelineWidth}px`,
+                          }}
+                        >
+                          {computedFilmstripElements}
+                        </div>
+                        <div className="absolute inset-0 bg-black/55 backdrop-blur-[0.5px] pointer-events-none" />
+                        <span className="absolute top-1 left-1.5 text-[8.5px] font-mono tracking-tight text-white/50 bg-black/60 px-1 py-0.5 rounded pointer-events-none select-none z-10">
+                          Context
+                        </span>
+                      </div>
+                    )}
+
                     {pieces.map((piece, pieceIdx) => {
 
                       const isPieceSelected =
@@ -2841,7 +2904,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                       cumulativeConcat += pieceDur;
 
-                      const leftSec = isSourceMode ? activeStart : concatStart;
+                      const leftSec = hasWindowPadding ? (leftPaddingDur + concatStart) : (isSourceMode ? activeStart : concatStart);
 
                       const leftPx = Math.round(leftSec * pxPerSec);
 
@@ -3017,6 +3080,39 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                     })}
 
+                    {/* Bounded Edit Window Right Padding Block (faded lead-out context) */}
+                    {hasWindowPadding && rightPaddingDur > 0.05 && (
+                      <div
+                        className="absolute top-0 bottom-0 overflow-hidden cursor-pointer select-none rounded-r-md border-l border-[#2E3542]/70 bg-[#090C0F]/90 z-10 group"
+                        style={{
+                          left: `${Math.round((leftPaddingDur + activeDur) * pxPerSec)}px`,
+                          width: `${Math.round(rightPaddingDur * pxPerSec)}px`,
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const clickX = e.clientX - rect.left;
+                          const clickSec = clickX / pxPerSec;
+                          scheduleSeek(Number((activeDur + clickSec).toFixed(2)));
+                        }}
+                        title={`Lead-out context padding (+${rightPaddingDur.toFixed(1)}s)`}
+                      >
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none select-none opacity-30 brightness-75"
+                          style={{
+                            left: `-${Math.round((leftPaddingDur + activeDur) * pxPerSec)}px`,
+                            width: `${totalTimelineWidth}px`,
+                          }}
+                        >
+                          {computedFilmstripElements}
+                        </div>
+                        <div className="absolute inset-0 bg-black/55 backdrop-blur-[0.5px] pointer-events-none" />
+                        <span className="absolute top-1 right-1.5 text-[8.5px] font-mono tracking-tight text-white/50 bg-black/60 px-1 py-0.5 rounded pointer-events-none select-none z-10">
+                          Context
+                        </span>
+                      </div>
+                    )}
+
                   </div>
 
                 );
@@ -3043,7 +3139,7 @@ export const CaptionTimeline: React.FC<CaptionTimelineProps> = ({
 
                     {rowGroups.map((grp, grpIdx) => {
 
-                      const left = (isSourceMode ? (clipStart + grp.start) : grp.start) * pxPerSec;
+                      const left = (hasWindowPadding ? (leftPaddingDur + grp.start) : (isSourceMode ? (clipStart + grp.start) : grp.start)) * pxPerSec;
 
                       const rawDur = Math.max(0.04, grp.end - grp.start);
 

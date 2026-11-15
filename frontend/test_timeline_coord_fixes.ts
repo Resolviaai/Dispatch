@@ -245,4 +245,48 @@ console.log('Test 5: captionTimeIsActive half-open seam...');
   console.log('  ✓ [start, end) seam with no double render at the boundary');
 }
 
+// ---------------------------------------------------------------------------
+// 6. Bounded Edit Window (5-min max): zeroed ruler on active clip & context padding.
+// ---------------------------------------------------------------------------
+console.log('Test 6: Bounded edit window padding and zeroed active ruler...');
+{
+  // Clip is 250s to 280s (30s duration), edit window is 190s to 340s (150s span)
+  const windowProps = {
+    currentTime: 0,
+    duration: 30,
+    selectedGroupId: null,
+    isPlaying: false,
+    onSeek: () => {},
+    onSelectGroup: () => {},
+    segments: [{ id: 'seg_1', start: 250, end: 280, index: 0 }],
+    clipStart: 250,
+    clipEnd: 280,
+    paddedStart: 190,
+    paddedEnd: 340,
+    sourceDuration: 600,
+    hideTrimControls: true,
+  } as any;
+
+  const windowMarkup = renderToStaticMarkup(React.createElement(CaptionTimeline, windowProps));
+
+  // Total timeline width spans 150s * 55px/s = 8250px (NOT 33000px of full source!)
+  assert.match(windowMarkup, /width:8250px/, 'timeline strictly spans bounded edit window (150s * 55px/s = 8250px)');
+  assert.doesNotMatch(windowMarkup, /width:33000px/, 'timeline does NOT inflate to 600s master source');
+
+  // Ruler tick at active clip start (leftPaddingDur = 60s -> 60s * 55px/s = 3300px) must display 00:00
+  assert.match(windowMarkup, /style="left:3300px"[^>]*><span[^>]*>00:00<\/span>/, 'active clip starts strictly at 00:00 on the ruler');
+
+  // Ruler tick at active clip end (3300px + 30s * 55px/s = 4950px) must display 00:30
+  assert.match(windowMarkup, /style="left:4950px"[^>]*><span[^>]*>00:30<\/span>/, 'active clip ends at 00:30 on the ruler');
+
+  // Left padding (0s to 60s -> 0px to 3299px) has ticks but NO timestamp numbers
+  assert.doesNotMatch(windowMarkup, /style="left:550px"[^>]*><span/, 'padding tick has no timestamp text label');
+
+  // Both context blocks are present with 'Context' badge
+  assert.match(windowMarkup, /title="Lead-in context padding \(-60\.0s\)"/, 'left lead-in context padding present');
+  assert.match(windowMarkup, /title="Lead-out context padding \(\+60\.0s\)"/, 'right lead-out context padding present');
+
+  console.log('  ✓ 5-min bounded window spans 8250px, active clip zeroed at 00:00, context padding rendered');
+}
+
 console.log('\nAll timeline coordinate-space fix tests passed.');
